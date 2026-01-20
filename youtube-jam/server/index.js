@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
@@ -199,4 +200,13 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(5000, () => console.log("Server running on port 5000"));
+// Serve static files from the React client
+app.use(express.static(path.join(__dirname, '../client/dist')));
+
+// Handle React routing, return all requests to React app
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+});
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
