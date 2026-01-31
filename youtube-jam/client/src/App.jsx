@@ -746,6 +746,12 @@ export default function JamRoom() {
                                     }
 
                                     if (!isRemoteUpdate.current) {
+                                        // Optimistically update serverStateRef to prevent our own drift loop from fighting us
+                                        if (serverStateRef.current) {
+                                            serverStateRef.current.isPlaying = true;
+                                            serverStateRef.current.videoTime = e.target.getCurrentTime();
+                                            serverStateRef.current.lastUpdate = Date.now();
+                                        }
                                         socket.emit('video-action', { roomId, type: 'play', value: e.target.getCurrentTime() });
                                     }
                                     // Enable Background Play logic
@@ -771,6 +777,12 @@ export default function JamRoom() {
     
                                     setIsPlaying(false);
                                     if (!isRemoteUpdate.current) {
+                                        // Optimistically update serverStateRef to STOP the ghost drag immediately
+                                        if (serverStateRef.current) {
+                                            serverStateRef.current.isPlaying = false;
+                                            serverStateRef.current.videoTime = e.target.getCurrentTime();
+                                            serverStateRef.current.lastUpdate = Date.now();
+                                        }
                                         socket.emit('video-action', { roomId, type: 'pause', value: e.target.getCurrentTime() });
                                     }
                                 }}
