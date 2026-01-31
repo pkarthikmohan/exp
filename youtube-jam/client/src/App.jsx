@@ -399,6 +399,8 @@ export default function JamRoom() {
     };
 
     const playNow = (vidId) => {
+        // UNLOCK SYNC
+        isRemoteUpdate.current = false;
         socket.emit('change-video', { roomId, videoId: vidId });
         setSearchResults([]);
         setSearchQuery("");
@@ -416,14 +418,19 @@ export default function JamRoom() {
         const player = playerRef.current?.internalPlayer;
         if (!player) return;
         
+        // UNLOCK SYNC: User interaction overrides remote lock
+        isRemoteUpdate.current = false;
+
         // Robust Toggle: Check actual player state
         // 1 = Playing, 2 = Paused, 5 = Cued, -1 = Unstarted, 3 = Buffering
         try {
             const state = await player.getPlayerState();
             if (state === 1) {
                  player.pauseVideo();
+                 // Optimistic update handled in onPause
             } else {
                  player.playVideo();
+                 // Optimistic update handled in onPlay
             }
         } catch(e) {
             console.error("Player toggle error:", e);
@@ -436,6 +443,9 @@ export default function JamRoom() {
         const time = parseFloat(e.target.value);
         setProgress(time);
         
+        // UNLOCK SYNC: User interaction overrides remote lock
+        isRemoteUpdate.current = false;
+
         // CRITICAL FIX: Update local refs IMMEDIATELY so the "Invisible Sync" loop 
         // doesn't think we are drifting and snap us back to the old time.
         lastTimeRef.current = time;
