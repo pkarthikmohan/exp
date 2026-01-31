@@ -153,6 +153,7 @@ io.on('connection', (socket) => {
             rooms[roomId] = { 
                 queue: [], 
                 history: [],
+                messages: [],
                 forwardHistory: [],
                 currentVideoId: null,
                 isPlaying: false,
@@ -170,7 +171,19 @@ io.on('connection', (socket) => {
             message: `${username} joined the jam!` 
         });
 
-        socket.emit('sync-state', rooms[roomId]);
+        // Construct a sync payload with adjusted time so client doesn't need server clock
+        const room = rooms[roomId];
+        let syncPacket = { ...room };
+        
+        if (room.isPlaying) {
+             const now = Date.now();
+             const elapsed = (now - room.lastUpdate) / 1000;
+             syncPacket.videoTime = (room.videoTime || 0) + elapsed;
+             // We don't change lastUpdate here because the client should overwrite it 
+             // with its local reception time to establish a valid anchor.
+        }
+
+        socket.emit('sync-state', syncPacket);
         
         // Initial suggestions
         fetchAndEmitRelated(rooms[roomId].currentVideoId, socket);
@@ -187,14 +200,48 @@ io.on('connection', (socket) => {
              const offset = (Date.now() - room.lastUpdate) / 1000;
              const serverTime = room.videoTime + offset;
              
-             // If incoming Play command is significantly BEHIND the server (e.g. lagging device waking up)
-             // We ignore it to prevent dragging everyone back.
-             // Threshold: 2 seconds
              if (serverTime - value > 2.0) {
                  console.log(`IGNORED lagging play from ${socket.username}. Server: ${serverTime.toFixed(1)}s, Client: ${value.toFixed(1)}s`);
-                 // Tell this lagging client to get back in sync
                  socket.emit('sync-state', room);
                  return; 
+             }
+        }
+
+        // Leader Sync: If a client reports they are ahead of the server model, we accept it.
+        // This lets the "Fastest Loader" drive the session forward.
+        if (type === 'time-update') {
+             if (room.isPlaying) {
+                 const offset = (Date.now() - room.lastUpdate) / 1000;
+                 const serverEstimatedTime = room.videoTime + offset;
+                 
+                 // If client is ahead by > 1.0s, update server to match (drag forward)
+                 // BUT: If they are WAY ahead (> 4.0s), they likely missed a Seek-Back event.
+                 // In that case, we REJECT their update and force them to sync.
+                 if (value > serverEstimatedTime + 1.0) {
+                     
+                     if (value > serverEstimatedTime + 6.0) {
+                          console.log(`Rejecting rogue future time-update from ${socket.username} (Value: ${value.toFixed(1)}, Server: ${serverEstimatedTime.toFixed(1)})`);
+                          socket.emit('sync-state', room);
+                          return;
+                     }
+
+                     // Update server state for small forward drifts (1-6s) usually caused by buffering catchups
+                     rooms[roomId].videoTime = value;
+                     rooms[roomId].lastUpdate = Date.now();
+                     
+                     // Broadcast silent update to everyone else so they realize they are behind
+                     socket.to(roomId).emit('video-action', { type: 'time-update', value });
+                     return; 
+                 } else {
+                     // Client is behind or on time.
+                     return;
+                 }
+             } else {
+                 // Room is paused, but client is sending time updates (rogue play state)
+                 // Force them to stop.
+                 console.log(`Client ${socket.username} sent time-update while room paused. Enforcing sync.`);
+                 socket.emit('sync-state', room);
+                 return;
              }
         }
 
@@ -313,6 +360,7 @@ io.on('connection', (socket) => {
              rooms[roomId] = { 
                 queue: [], 
                 history: [],
+                messages: [],
                 forwardHistory: [],
                 currentVideoId: null,
                 isPlaying: false,
@@ -326,7 +374,18 @@ io.on('connection', (socket) => {
     });
 
     socket.on('send-message', ({ roomId, message, user }) => {
-        io.to(roomId).emit('receive-message', { user, message, id: Date.now() });
+        const msgObj = { user, message, id: Date.now() };
+        
+        // Store message in room history (limit to last 50)
+        if (rooms[roomId]) {
+            if (!rooms[roomId].messages) rooms[roomId].messages = [];
+            rooms[roomId].messages.push(msgObj);
+            if (rooms[roomId].messages.length > 50) {
+                rooms[roomId].messages.shift();
+            }
+        }
+        
+        io.to(roomId).emit('receive-message', msgObj);
     });
 
     socket.on('disconnect', () => {
