@@ -183,6 +183,18 @@ export default function JamRoom() {
                              player.setPlaybackRate(1);
                          }
                      }
+                } else if (serverStateRef.current && !serverStateRef.current.isPlaying) {
+                    // FIX: Hard sync for PAUSED state
+                    const state = await player.getPlayerState();
+                    if (state === 1) { 
+                         // If playing when we should be paused, STOP.
+                         player.pauseVideo();
+                    }
+                    // If we drifted while paused (e.g. mobile "counting"), snap back.
+                    if (Math.abs(currentTime - serverStateRef.current.videoTime) > 0.5) {
+                         player.seekTo(serverStateRef.current.videoTime, true);
+                    }
+                }
                 }
 
             } catch (e) {
@@ -273,11 +285,15 @@ export default function JamRoom() {
                 player?.pauseVideo();
             }
             if (type === 'seek') {
-                 player?.seekTo(value);
-                 // If we were playing, verify we keep playing? 
-                 // Usually seeking while playing keeps playing.
-                 if (serverStateRef.current?.isPlaying) {
-                     player.playVideo();
+                 // Ensure we just seek and STAY paused if we were paused
+                 player?.seekTo(value, true);
+                 
+                 // CRITICAL FIX: Explicitly pause if server says we are paused.
+                 // This prevents the "resume after seek" behavior some players have.
+                 if (!serverStateRef.current?.isPlaying) {
+                     player?.pauseVideo();
+                 } else {
+                     player?.playVideo();
                  }
             }
             setTimeout(() => { isRemoteUpdate.current = false; }, 1000); // Debounce remote actions
