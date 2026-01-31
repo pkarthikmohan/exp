@@ -1,10 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import YouTube from 'react-youtube';
-import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus as PlusIcon, SkipBack, SkipForward, Trash2, LogOut, Menu, X, UserCircle, Heart, Maximize } from 'lucide-react';
+import EmojiPicker from 'emoji-picker-react';
+import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus as PlusIcon, SkipBack, SkipForward, Trash2, LogOut, Menu, X, UserCircle, Heart, Maximize, Smile, Image as ImageIcon } from 'lucide-react';
 import axios from 'axios';
 
 const socket = io();
+
+const REACTION_GIFS = [
+    { url: "https://media.giphy.com/media/GeimqsH0TLDt4tScGw/giphy.gif", name: "Vibe Cat" },
+    { url: "https://media.giphy.com/media/yr7n0u3qzO9nG/giphy.gif", name: "Fire" },
+    { url: "https://media.giphy.com/media/blSTtZ4jSB01q/giphy.gif", name: "Dance" },
+    { url: "https://media.giphy.com/media/l3q2u6MXJjekqyJqw/giphy.gif", name: "Applause" },
+    { url: "https://media.giphy.com/media/OPU6wzx8JrHna/giphy.gif", name: "Cry" },
+    { url: "https://media.giphy.com/media/gcemn4N9bB7DW/giphy.gif", name: "Cool" }
+];
 
 export default function JamRoom() {
     const [inRoom, setInRoom] = useState(false);
@@ -18,6 +28,10 @@ export default function JamRoom() {
     const [suggestedVideos, setSuggestedVideos] = useState([]);
     const [messages, setMessages] = useState([]);
     const [inputMsg, setInputMsg] = useState("");
+    const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+    const [activeTab, setActiveTab] = useState('emoji');
+    const [gifSearch, setGifSearch] = useState("");
+    const [gifResults, setGifResults] = useState([]);
     const [currentVideoId, setCurrentVideoId] = useState(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -30,6 +44,54 @@ export default function JamRoom() {
     const isRemoteUpdate = useRef(false);
     const lastTimeRef = useRef(0);
     const chatContainerRef = useRef(null);
+    const drawerRef = useRef(null);
+
+    // Click Outside Handler for Emoji Drawer
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (drawerRef.current && !drawerRef.current.contains(event.target) && !event.target.closest('.drawer-toggle')) {
+                setIsDrawerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+             document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, []);
+
+    const getColor = (str) => {
+        const colors = [
+            '#FF9AA2', '#FFB7B2', '#FFDAC1', '#E2F0CB', '#B5EAD7', '#C7CEEA',
+            '#F49AC2', '#CB99C9', '#C23B22', '#FFD1DC', '#DEA5A4', '#FF6961',
+            '#77DD77', '#AEC6CF', '#F49AC2', '#03C03C', '#FDFD96', '#84b6f4'
+        ];
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return colors[Math.abs(hash) % colors.length];
+    };
+
+    const searchGifs = async (query) => {
+        if (!query.trim()) {
+            setGifResults([]);
+            return;
+        }
+        try {
+            // Switched to Tenor API (Reliable Public Key)
+            const API_KEY = 'LIVDSRZULELA'; 
+            const res = await axios.get(`https://g.tenor.com/v1/search?q=${query}&key=${API_KEY}&limit=20`);
+            
+            // Map Tenor result format to our app format
+            const mapped = res.data.results.map(g => ({ 
+                url: g.media[0].tinygif.url, 
+                name: g.content_description || "GIF"
+            }));
+            setGifResults(mapped);
+        } catch (e) {
+            console.error("GIF Search Failed", e);
+        }
+    };
 
     const scrollToBottom = () => {
         if (chatContainerRef.current) {
@@ -53,44 +115,82 @@ export default function JamRoom() {
         }
     }, []);
     
-    // Polling for manual seek detection (since YouTube API doesn't expose onSeek)
+    // Polling for manual seek detection & Invisible Sync
     useEffect(() => {
+        let tickCount = 0;
         const interval = setInterval(async () => {
-            if (!playerRef.current || !inRoom) return;
-            try {
+             if (!playerRef.current || !inRoom) return;
+             try {
                 const player = playerRef.current.internalPlayer;
                 const currentTime = await player.getCurrentTime();
                 const totalDuration = await player.getDuration();
                 
                 setProgress(currentTime);
                 setDuration(totalDuration);
-
-                // Diff check (0.5s interval -> expect ~0.5s change)
-                const diff = currentTime - lastTimeRef.current;
                 
-                // Detect Seek taking into account normal playback
-                // If diff is > 1.5s (forward) or negative (rewind beyond small jitter)
-                const isSeek = Math.abs(diff) > 1.5;
+                // --- Heartbeat: Tell server where we are occassionally ---
+                tickCount++;
+                if (tickCount % 4 === 0 && isPlaying) { // Every 2s
+                    socket.emit('video-action', { roomId, type: 'time-update', value: currentTime });
+                }
+
+                // --- 1. Detect Manual Seek ---
+                const diff = currentTime - lastTimeRef.current;
+                const isSeek = Math.abs(diff) > 1.5; // Threshold for manual jump
 
                 if (isSeek) {
-                    if (!isRemoteUpdate.current && Math.abs(currentTime - 0) > 1) { // Ignore seeking to 0 (often reset)
+                    if (!isRemoteUpdate.current && Math.abs(currentTime - 0) > 1) { 
                          console.log('Seek detected:', diff);
                          socket.emit('video-action', { roomId, type: 'seek', value: currentTime });
                          
-                         // Force sync play state if currently playing
                          const state = await player.getPlayerState();
-                         if (state === 1) { // 1 = PLAYING
+                         if (state === 1) { 
                              socket.emit('video-action', { roomId, type: 'play', value: currentTime });
                          }
                     }
                 }
                 lastTimeRef.current = currentTime;
+
+                // --- 2. Invisible Sync Correction ---
+                // Only run if we have a server state and we are supposed to be playing
+                if (serverStateRef.current && serverStateRef.current.isPlaying) {
+                     // Current Server Time = recorded time + elapsed since update
+                     const timeByServer = serverStateRef.current.videoTime + (Date.now() - serverStateRef.current.lastUpdate) / 1000;
+                     const drift = currentTime - timeByServer;
+                     
+                     // If drift is HUGE (> 2s), we forced a seek in socket.on('sync-state'), 
+                     // but we should also check here just in case we drifted continually.
+                     if (Math.abs(drift) > 2.5) {
+                         console.log(`Major drift detected (${drift.toFixed(2)}s). Hard syncing...`);
+                         isRemoteUpdate.current = true;
+                         player.seekTo(timeByServer, true);
+                         setTimeout(() => { isRemoteUpdate.current = false; }, 1000);
+                     } 
+                     // Small Drift Correction (0.1s to 2.5s)
+                     else if (Math.abs(drift) > 0.15) {
+                         // Aagressive catchup: 1.05x if behind, 0.95x if ahead
+                         const targetRate = drift > 0 ? 0.95 : 1.05;
+                         
+                         const currentRate = await player.getPlaybackRate();
+                         if (currentRate !== targetRate) {
+                             console.log(`Micro-sync: Adjusting rate to ${targetRate} (Drift: ${drift.toFixed(3)}s)`);
+                             player.setPlaybackRate(targetRate);
+                         }
+                     } else {
+                         // We are insync (< 0.15s), restore normal speed
+                         const currentRate = await player.getPlaybackRate();
+                         if (currentRate !== 1) {
+                             player.setPlaybackRate(1);
+                         }
+                     }
+                }
+
             } catch (e) {
-                // Ignore player errors or not ready
+                // Ignore player errors
             }
-        }, 500); // 500ms polling for tighter sync
+        }, 500); 
         return () => clearInterval(interval);
-    }, [inRoom, roomId]);
+    }, [inRoom, roomId, isPlaying]); // Added isPlaying dependency for heartbeat
 
     // Join Room Logic
     const handleJoin = (e) => {
@@ -133,9 +233,17 @@ export default function JamRoom() {
         });
         
         socket.on('video-action', ({ type, value }) => {
+            if (type === 'time-update') {
+                 // Silent update: Update our model of "Truth" so our local sync loop can react
+                 if (serverStateRef.current) {
+                     serverStateRef.current.videoTime = value;
+                     serverStateRef.current.lastUpdate = Date.now();
+                 }
+                 return; // Do nothing else, let the loop handle it
+            }
+
             isRemoteUpdate.current = true;
-            // Prevent echo by updating lastTimeRef to the new remote time
-            lastTimeRef.current = value;
+            lastTimeRef.current = value; // Prevent echo
 const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' ? false : serverStateRef.current?.isPlaying);
             setIsPlaying(playing);
 
@@ -176,10 +284,16 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
         
         socket.on('sync-state', (state) => {
             setQueue(state.queue || []);
+            if (state.messages) setMessages(state.messages);
             setCurrentVideoId(state.currentVideoId);
             setIsPlaying(state.isPlaying);
             if (state.videoTime) setProgress(state.videoTime);
-            serverStateRef.current = state;
+            
+            // CRITICAL: Anchor server state to LOCAL time to avoid clock drift issues
+            serverStateRef.current = {
+                ...state,
+                lastUpdate: Date.now() 
+            };
 
             // FORCE SYNC: If the player is active, ensure we align with the server
             // mainly for mobile (reconnects) or late joiners where onReady fired before sync
@@ -282,27 +396,43 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
          // Optimistically we try, server logic handles empty queue/forward history
          socket.emit('play-next', { roomId });
     };
-    const handleTogglePlay = () => {
+    const handleTogglePlay = async () => {
         const player = playerRef.current?.internalPlayer;
         if (!player) return;
         
-        if (isPlaying) {
-             player.pauseVideo();
-        } else {
-             player.playVideo();
+        // Robust Toggle: Check actual player state
+        // 1 = Playing, 2 = Paused, 5 = Cued, -1 = Unstarted, 3 = Buffering
+        try {
+            const state = await player.getPlayerState();
+            if (state === 1) {
+                 player.pauseVideo();
+            } else {
+                 player.playVideo();
+            }
+        } catch(e) {
+            console.error("Player toggle error:", e);
+            // Fallback to state check
+            if (isPlaying) player.pauseVideo(); else player.playVideo();
         }
     };
 
     const handleSeekChange = (e) => {
         const time = parseFloat(e.target.value);
         setProgress(time);
+        
+        // CRITICAL FIX: Update local refs IMMEDIATELY so the "Invisible Sync" loop 
+        // doesn't think we are drifting and snap us back to the old time.
+        lastTimeRef.current = time;
+        if (serverStateRef.current) {
+            serverStateRef.current.videoTime = time;
+            serverStateRef.current.lastUpdate = Date.now();
+            if (isPlaying) serverStateRef.current.isPlaying = true;
+        }
+
         playerRef.current?.internalPlayer.seekTo(time, true);
-         // Rely on the polling loop to detect the seek relative to previous time
-         // OR force emit here for snappier response?
-         // The polling loop logic I wrote earlier handles checking diff.
-         // But since we are manually scrubbing, the "diff" in polling might be confused.
-         // Let's explicitly emit here to be responsive.
-         socket.emit('video-action', { roomId, type: 'seek', value: time });
+        
+        // Emit seek event
+        socket.emit('video-action', { roomId, type: 'seek', value: time });
          
          if (isPlaying) {
              socket.emit('video-action', { roomId, type: 'play', value: time });
@@ -476,6 +606,14 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
                         <Users size={16} className="text-purple-500" />
                         <span className="text-sm font-bold">{userCount} Listening</span>
                     </div>
+                    
+                    <button 
+                        onClick={handleLeave}
+                        className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 px-4 py-2 rounded-2xl border border-red-500/20 transition group"
+                    >
+                        <LogOut size={16} className="group-hover:-translate-x-1 transition-transform" />
+                        <span className="text-sm font-bold">Leave</span>
+                    </button>
                 </div>
             </header>
 
@@ -572,12 +710,25 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
                                     // Initial duration set
                                     setDuration(e.target.getDuration());
                                 }}
-                                onPlay={(e) => {
+                                onPlay={async (e) => {
                                     const data = e.target.getVideoData();
                                     if (data && data.title) setCurrentTitle(data.title);
 
                                     setIsPlaying(true);
                                     setDuration(e.target.getDuration());
+
+                                    // Immediate Sync Check on Play Start to fix "Buffering Lag"
+                                    if (serverStateRef.current && serverStateRef.current.isPlaying) {
+                                        const timeByServer = serverStateRef.current.videoTime + (Date.now() - serverStateRef.current.lastUpdate) / 1000;
+                                        const drift = e.target.getCurrentTime() - timeByServer;
+                                        if (Math.abs(drift) > 2.0) {
+                                             console.log("Initial Play Sync: Hard Seeking to", timeByServer);
+                                             isRemoteUpdate.current = true;
+                                             e.target.seekTo(timeByServer, true);
+                                             setTimeout(() => { isRemoteUpdate.current = false; }, 1000);
+                                        }
+                                    }
+
                                     if (!isRemoteUpdate.current) {
                                         socket.emit('video-action', { roomId, type: 'play', value: e.target.getCurrentTime() });
                                     }
@@ -619,7 +770,7 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
                                     width: '100%', 
                                     height: '100%', 
                                     playerVars: { 
-                                        autoplay: 1, 
+                                        autoplay: 0,        // DISABLED to allow onReady to control start time 
                                         playsinline: 1,
                                         controls: 0,        // Hide default controls (progress bar, etc)
                                         rel: 0,             // Minimize recommendations
@@ -655,15 +806,15 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
                     <div className="flex items-center justify-center gap-6 mb-8">
                         <button 
                             onClick={handlePrevious} 
-                            className="p-3 bg-white/5 rounded-xl hover:bg-white/10 text-white transition hover:scale-105 active:scale-95"
+                            className="group p-3 bg-white/5 hover:bg-white/10 rounded-2xl text-white transition-all duration-300 hover:scale-110 active:scale-95 ring-1 ring-white/5 hover:ring-white/20"
                             title="Previous Song"
                         >
-                            <SkipBack size={24} fill="white" />
+                            <SkipBack size={28} className="fill-white/20 group-hover:fill-white transition-all" />
                         </button>
                         
                         <button 
                             onClick={handleTogglePlay} 
-                            className="p-4 bg-white rounded-full hover:bg-gray-200 text-black transition hover:scale-105 active:scale-95 shadow-lg shadow-white/20"
+                            className="p-5 bg-white rounded-full hover:bg-gray-200 text-black transition-all duration-300 hover:scale-110 active:scale-95 shadow-xl shadow-white/10 hover:shadow-white/30"
                             title={isPlaying ? "Pause" : "Play"}
                         >
                             {isPlaying ? <Pause size={32} fill="black" /> : <Play size={32} fill="black" className="ml-1" />}
@@ -671,10 +822,10 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
 
                         <button 
                             onClick={handleNext} 
-                            className="p-3 bg-purple-600 rounded-xl hover:bg-purple-500 text-white transition hover:scale-105 active:scale-95 shadow-lg shadow-purple-500/20"
+                            className="group p-3 bg-white/5 hover:bg-white/10 rounded-2xl text-white transition-all duration-300 hover:scale-110 active:scale-95 ring-1 ring-white/5 hover:ring-white/20"
                             title="Next Song"
                         >
-                            <SkipForward size={24} fill="white" />
+                            <SkipForward size={28} className="fill-white/20 group-hover:fill-white transition-all" />
                         </button>
                     </div>
 
@@ -715,23 +866,122 @@ const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' 
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="font-bold flex items-center gap-2"><MessageSquare size={18} className="text-purple-500" /> Chat Room</h3>
                         </div>
-                        <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-2 mb-4 pr-2 scrollbar-hide">
+                        <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-3 mb-4 pr-2 scrollbar-hide">
                             {messages.map(m => (
-                                <div key={m.id} className="bg-white/5 p-2 px-3 rounded-xl border border-white/5 flex items-baseline gap-2">
-                                    <span className="text-xs font-bold text-purple-400 shrink-0">{m.user}:</span>
-                                    <span className="text-sm text-gray-200 break-words">{m.message}</span>
+                                <div key={m.id} className="flex gap-3 hover:bg-white/5 p-2 rounded-xl transition group animate-fade-in">
+                                    <img 
+                                        src={`https://api.dicebear.com/7.x/identicon/svg?seed=${m.user}`} 
+                                        className="w-8 h-8 rounded-full bg-black/20 shrink-0 border border-white/10" 
+                                        alt={m.user}
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-baseline gap-2 mb-0.5">
+                                            <span 
+                                                className="text-xs font-bold truncate" 
+                                                style={{ color: getColor(m.user) }}
+                                            >
+                                                {m.user}
+                                            </span>
+                                            <span className="text-[10px] text-gray-600 group-hover:text-gray-400 transition">
+                                                {new Date(m.id).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                            </span>
+                                        </div>
+                                        {m.message.startsWith('AG_GIF::') ? (
+                                            <img src={m.message.replace('AG_GIF::', '')} className="rounded-lg max-w-[150px] mt-1 border border-white/10" alt="GIF" />
+                                        ) : (
+                                            <p className="text-sm text-gray-200 break-words leading-snug">{m.message}</p>
+                                        )}
+                                    </div>
                                 </div>
                             ))}
                         </div>
-                        <div className="relative">
+                        
+                        {/* Unified Emoji & GIF Drawer */}
+                        {isDrawerOpen && (
+                            <div ref={drawerRef} className="absolute bottom-20 right-4 z-50 bg-[#1e1e24] border border-white/10 rounded-2xl shadow-2xl w-[320px] overflow-hidden flex flex-col h-[400px]">
+                                {/* Tabs */}
+                                <div className="flex border-b border-white/10">
+                                    <button 
+                                        className={`flex-1 p-3 text-sm font-bold transition flex items-center justify-center gap-2 ${activeTab === 'emoji' ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5'}`}
+                                        onClick={() => setActiveTab('emoji')}
+                                    >
+                                        <Smile size={16} /> Emojis
+                                    </button>
+                                    <button 
+                                        className={`flex-1 p-3 text-sm font-bold transition flex items-center justify-center gap-2 ${activeTab === 'gif' ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5'}`}
+                                        onClick={() => setActiveTab('gif')}
+                                    >
+                                        <ImageIcon size={16} /> GIFs
+                                    </button>
+                                </div>
+                        
+                                {/* Content */}
+                                <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
+                                    {activeTab === 'emoji' ? (
+                                         <EmojiPicker 
+                                            theme="dark"
+                                            width="100%"
+                                            height="350px"
+                                            searchDisabled
+                                            skinTonesDisabled
+                                            previewConfig={{ showPreview: false }}
+                                            onEmojiClick={(e) => {
+                                                setInputMsg(prev => prev + e.emoji);
+                                            }} 
+                                        />
+                                    ) : (
+                                        <div className="flex flex-col h-full">
+                                            <div className="p-2 sticky top-0 bg-[#1e1e24] z-10">
+                                                <div className="flex items-center bg-white/5 rounded-lg border border-white/10 px-2">
+                                                    <Search size={14} className="text-gray-400 shrink-0" />
+                                                    <input 
+                                                        className="w-full bg-transparent border-none p-2 text-xs text-white placeholder-gray-500 focus:outline-none"
+                                                        placeholder="Search GIFs via Tenor..."
+                                                        value={gifSearch}
+                                                        onChange={(e) => {
+                                                            setGifSearch(e.target.value);
+                                                            searchGifs(e.target.value);
+                                                        }}
+                                                    />
+                                                    {gifSearch && <button onClick={() => { setGifSearch(''); setGifResults([]); }}><X size={14} className="text-gray-400 hover:text-white shrink-0" /></button>}
+                                                </div>
+                                            </div>
+                                            <div className="columns-2 gap-2 p-2 pt-0 overflow-y-auto scrollbar-thin">
+                                                 {(gifResults.length > 0 ? gifResults : REACTION_GIFS).map((g, i) => (
+                                                    <button 
+                                                        key={i} 
+                                                        onClick={() => {
+                                                            socket.emit('send-message', { roomId, message: `AG_GIF::${g.url}`, user: username });
+                                                            setIsDrawerOpen(false);
+                                                        }}
+                                                        className="relative group w-full mb-2 rounded-lg overflow-hidden border border-white/5 hover:border-purple-500 transition break-inside-avoid"
+                                                    >
+                                                        <img src={g.url} className="w-full h-auto object-cover" loading="lazy" />
+                                                        <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-[10px] text-center py-1 opacity-0 group-hover:opacity-100 transition whitespace-nowrap overflow-hidden px-1">{g.name || 'GIF'}</span>
+                                                    </button>
+                                                 ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="relative flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-2">
+                            <button 
+                                onClick={() => setIsDrawerOpen(!isDrawerOpen)}
+                                className={`drawer-toggle p-2 rounded-lg transition ${isDrawerOpen ? 'text-purple-400 bg-white/10' : 'text-gray-400 hover:text-purple-400'}`}
+                            >
+                                <Smile size={20} />
+                            </button>
                             <input 
                                 value={inputMsg}
                                 onChange={(e) => setInputMsg(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-                                className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-4 pr-12 focus:outline-none focus:border-purple-500 transition" 
+                                className="flex-1 bg-transparent border-none py-3 px-2 focus:outline-none placeholder-gray-500 text-sm" 
                                 placeholder="Type a message..." 
                             />
-                            <button onClick={sendMessage} className="absolute right-2 top-2 p-1.5 bg-purple-600 rounded-lg hover:bg-purple-500 transition">
+                            <button onClick={sendMessage} className="p-2 bg-purple-600 rounded-lg hover:bg-purple-500 transition shadow-lg shadow-purple-600/20">
                                 <Send size={16} />
                             </button>
                         </div>
