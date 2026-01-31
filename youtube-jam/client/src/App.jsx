@@ -24,6 +24,18 @@ export default function JamRoom() {
     const isRemoteUpdate = useRef(false);
     const lastTimeRef = useRef(0);
 
+      // Restore session on refresh
+    useEffect(() => {
+        const savedRoom = sessionStorage.getItem('jam_roomId');
+        const savedUser = sessionStorage.getItem('jam_username');
+        if (savedRoom && savedUser) {
+            setRoomId(savedRoom);
+            setUsername(savedUser);
+            socket.emit('join-room', { roomId: savedRoom, username: savedUser });
+            setInRoom(true);
+        }
+    }, []);
+    
     // Polling for manual seek detection (since YouTube API doesn't expose onSeek)
     useEffect(() => {
         const interval = setInterval(async () => {
@@ -57,6 +69,8 @@ export default function JamRoom() {
     const handleJoin = (e) => {
         e.preventDefault();
         if (roomId && username) {
+            sessionStorage.setItem('jam_roomId', roomId);
+            sessionStorage.setItem('jam_username', username);
             socket.emit('join-room', { roomId, username });
             setInRoom(true);
         }
@@ -196,14 +210,14 @@ export default function JamRoom() {
                     <form onSubmit={handleJoin} className="space-y-4">
                         <input 
                             required 
-                            className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition" 
+                           className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white"                            
                             placeholder="Your Name" 
                             value={username}
                             onChange={e => setUsername(e.target.value)} 
                         />
                         <input 
                             required 
-                            className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition" 
+                            className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white" 
                             placeholder="Room ID (e.g. ChillVibes)" 
                             value={roomId}
                             onChange={e => setRoomId(e.target.value)} 
