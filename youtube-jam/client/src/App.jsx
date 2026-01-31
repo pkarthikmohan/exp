@@ -52,7 +52,7 @@ export default function JamRoom() {
             setInRoom(true);
         }
     }, []);
-
+    
     // Polling for manual seek detection (since YouTube API doesn't expose onSeek)
     useEffect(() => {
         const interval = setInterval(async () => {
