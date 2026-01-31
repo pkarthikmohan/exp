@@ -316,14 +316,14 @@ export default function JamRoom() {
             const player = playerRef.current?.internalPlayer;
             if (player && state) {
                 if (state.isPlaying) {
-                     // Calculate where we SHOULD be
-                     // Use a small offset adjustment if client/server clocks drift? 
-                     // For now simple delta.
-                     const timePassed = (Date.now() - state.lastUpdate) / 1000;
-                     const targetTime = (state.videoTime || 0) + timePassed;
+                     // Since server already adjusted videoTime to "Now" in syncPacket, 
+                     // we don't need to add (Date.now() - lastUpdate) again.
+                     // Just align to the received time.
+                     const targetTime = state.videoTime || 0;
                      
                      player.getCurrentTime().then(curr => {
                          // If we are drifting by more than 2 seconds (common in mobile background throttles)
+                         // OR if we are seemingly behind due to double-counting bug fixed above
                          if (Math.abs(curr - targetTime) > 2.0) {
                              console.log(`Force Sync: Jumping from ${curr} to ${targetTime}`);
                              player.seekTo(targetTime, true);
