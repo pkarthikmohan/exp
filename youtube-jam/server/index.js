@@ -23,12 +23,24 @@ app.get('/search', async (req, res) => {
         
         let results = [];
         try {
-            const videos = await YouTube.search(q, { limit: 12, type: 'video' });
-            results = videos.map(item => ({
-                id: item.id,
-                title: item.title,
-                thumb: item.thumbnail?.url || ''
-            }));
+            const isUrl = /^(https?\:\/\/)?(www\.youtube\.com|youtu\.?be)\/.+$/.test(q);
+            if (isUrl) {
+                const video = await YouTube.getVideo(q);
+                if (video) {
+                    results = [{
+                        id: video.id,
+                        title: video.title,
+                        thumb: video.thumbnail?.url || ''
+                    }];
+                }
+            } else {
+                const videos = await YouTube.search(q, { limit: 12, type: 'video' });
+                results = videos.map(item => ({
+                    id: item.id,
+                    title: item.title,
+                    thumb: item.thumbnail?.url || ''
+                }));
+            }
             console.log('Search results:', results.length);
         } catch (apiError) {
             console.error('YouTube Search Error:', apiError.message);
@@ -46,40 +58,85 @@ app.get('/search', async (req, res) => {
 });
 
 const fetchAndEmitRelated = async (videoId, socket) => {
+    if (!videoId) return;
     try {
         console.log('Fetching related for:', videoId);
         
-        // 1. Get stats/title
+        // 1. Get stats/title/channel
         const videoResults = await YouTube.search(videoId, { limit: 1, type: 'video' });
-        const title = videoResults[0]?.title;
+        const sourceVideo = videoResults[0];
         
-        if (!title) throw new Error("Video not found");
+        if (!sourceVideo) throw new Error("Video not found");
 
-        // 2. Improved Fallback: Search for a mix/playlist of similar style
-        // "Mix" keyword usually forces YouTube to return a generated playlist or compilation
-        const query = `mix related to ${title}`;
+        const title = sourceVideo.title;
+        const channelName = sourceVideo.channel?.name || '';
+        
+        // 2. Intelligent Discovery Strategy
+        // We want to avoid "Same Song (Remix)" or "Same Song (Live)"
+        // We want "Songs with similar vibe"
+        
+        // Clean title: remove "Official Video", "Lyrics", content in brackets often helps
+        // e.g. "Coldplay - Viva La Vida (Official Video)" -> just "Viva La Vida"
+        const cleanTitle = title
+            .replace(/[\(\[\{].*?[\)\]\}]/g, '') // remove brackets
+            .replace(/official|video|audio|lyrics|hq|hd|mv/gi, '') // remove keywords
+            .replace(/[^\w\s]/gi, '') // remove special chars
+            .trim();
+
+        console.log(`Analyzing vibe for: "${cleanTitle}" by ${channelName}`);
+        
+        const queries = [
+            `songs similar to ${cleanTitle} ${channelName}`, // Semantic search
+            `${channelName} radio`, // Artist radio
+            `best songs like ${cleanTitle}` // Vibe matching
+        ];
+        
+        // Pick one query strategy randomly to vary results or run parallel? 
+        // Let's run a strong semantic search first.
+        let query = queries[0];
         console.log('Searching related with query:', query);
         
-        let videos = await YouTube.search(query, { limit: 12, type: 'video' });
+        let videos = await YouTube.search(query, { limit: 20, type: 'video' });
         
-        // If that returns nothing, try generic
-        if (videos.length < 2) {
-             videos = await YouTube.search(`${title} similar songs`, { limit: 12, type: 'video' });
-        }
-
         const results = videos
             .filter(v => v.id !== videoId)
+            // FILTER: Remove songs that sound too much like the original title (covers, remixes)
+            .filter(v => {
+                const resTitle = v.title.toLowerCase();
+                const originalWords = cleanTitle.toLowerCase().split(' ').filter(w => w.length > 3);
+                
+                // If the result contains ALL the significant words of original title, it's likely a version of it.
+                // We want to BLOCK it unless it's a completely different artist (which is hard to know for sure in simple search)
+                const matchCount = originalWords.filter(word => resTitle.includes(word)).length;
+                const isSameSong = matchCount >= Math.max(1, originalWords.length - 1); 
+                
+                return !isSameSong;
+            })
+            .slice(0, 10)
             .map(item => ({
                 id: item.id,
                 title: item.title,
                 thumb: item.thumbnail?.url || `https://img.youtube.com/vi/${item.id}/mqdefault.jpg`
             }));
+            
+        // Fallback: If strict filtering killed everything, just show artist's other top songs
+        if (results.length < 4 && channelName) {
+            console.log('Fallback to artist top songs...');
+            const artistMix = await YouTube.search(`${channelName} top songs`, { limit: 10, type: 'video' });
+             const artistResults = artistMix
+                .filter(v => v.id !== videoId && !results.find(r => r.id === v.id))
+                .map(item => ({
+                    id: item.id,
+                    title: item.title,
+                    thumb: item.thumbnail?.url || `https://img.youtube.com/vi/${item.id}/mqdefault.jpg`
+                }));
+             results.push(...artistResults);
+        }
         
         console.log('Found related videos:', results.length);
         socket.emit('related-videos', results);
     } catch (e) {
         console.error('Error fetching related:', e.message);
-        // Fallback
         socket.emit('related-videos', []);
     }
 };
@@ -95,7 +152,9 @@ io.on('connection', (socket) => {
         if (!rooms[roomId]) {
             rooms[roomId] = { 
                 queue: [], 
-                currentVideoId: 'dQw4w9WgXcQ',
+                history: [],
+                forwardHistory: [],
+                currentVideoId: null,
                 isPlaying: false,
                 videoTime: 0,
                 lastUpdate: Date.now()
@@ -118,19 +177,38 @@ io.on('connection', (socket) => {
     });
 
     socket.on('video-action', ({ roomId, type, value }) => {
-        console.log(`Action in ${roomId}: ${type} at ${value}`);
-        if (rooms[roomId]) {
-            rooms[roomId].lastUpdate = Date.now();
-            if (type === 'play') {
-                rooms[roomId].isPlaying = true;
-                rooms[roomId].videoTime = value;
-            } else if (type === 'pause') {
-                rooms[roomId].isPlaying = false;
-                rooms[roomId].videoTime = value;
-            } else if (type === 'seek') {
-                rooms[roomId].videoTime = value;
-            }
+        const room = rooms[roomId];
+        if (!room) return;
+
+        console.log(`Action in ${roomId}: ${type} at ${value} by ${socket.username}`);
+
+        // "Most Forward" Protection Logic
+        if (type === 'play' && room.isPlaying) {
+             const offset = (Date.now() - room.lastUpdate) / 1000;
+             const serverTime = room.videoTime + offset;
+             
+             // If incoming Play command is significantly BEHIND the server (e.g. lagging device waking up)
+             // We ignore it to prevent dragging everyone back.
+             // Threshold: 2 seconds
+             if (serverTime - value > 2.0) {
+                 console.log(`IGNORED lagging play from ${socket.username}. Server: ${serverTime.toFixed(1)}s, Client: ${value.toFixed(1)}s`);
+                 // Tell this lagging client to get back in sync
+                 socket.emit('sync-state', room);
+                 return; 
+             }
         }
+
+        rooms[roomId].lastUpdate = Date.now();
+        if (type === 'play') {
+            rooms[roomId].isPlaying = true;
+            rooms[roomId].videoTime = value;
+        } else if (type === 'pause') {
+            rooms[roomId].isPlaying = false;
+            rooms[roomId].videoTime = value;
+        } else if (type === 'seek') {
+            rooms[roomId].videoTime = value;
+        }
+        
         socket.to(roomId).emit('video-action', { type, value });
     });
 
@@ -138,6 +216,12 @@ io.on('connection', (socket) => {
         console.log(`Change video in ${roomId} to ${videoId}`);
         if (!rooms[roomId]) return;
         
+        if (!rooms[roomId].history) rooms[roomId].history = [];
+        rooms[roomId].history.push(rooms[roomId].currentVideoId);
+        
+        // Clear forward history because we started a new path
+        rooms[roomId].forwardHistory = [];
+
         rooms[roomId].currentVideoId = videoId;
         rooms[roomId].videoTime = 0;
         rooms[roomId].isPlaying = true;
@@ -161,9 +245,28 @@ io.on('connection', (socket) => {
         const room = rooms[roomId];
         if (!room) return;
 
-        if (room.queue.length > 0) {
+        // Check Forward History first (User hit "Back" previously)
+        if (room.forwardHistory && room.forwardHistory.length > 0) {
+            const nextId = room.forwardHistory.pop();
+
+            if (!room.history) room.history = [];
+            room.history.push(room.currentVideoId);
+            
+            room.currentVideoId = nextId;
+            room.videoTime = 0;
+            room.isPlaying = true;
+            room.lastUpdate = Date.now();
+            
+            io.to(roomId).emit('sync-state', room);
+            io.to(roomId).emit('change-video', nextId);
+        
+        } else if (room.queue.length > 0) {
             // Play queue
             const nextVideo = room.queue.shift();
+
+            if (!room.history) room.history = [];
+            room.history.push(room.currentVideoId);
+
             room.currentVideoId = nextVideo.id;
             room.videoTime = 0;
             room.isPlaying = true;
@@ -172,15 +275,51 @@ io.on('connection', (socket) => {
             io.to(roomId).emit('sync-state', room);
             io.to(roomId).emit('change-video', nextVideo.id);
         } else {
-            // Nothing in queue, just stop or keep playing logic 
-            // Better to let client know or pick random? 
-            // For now, client will handle suggestion fallback if queue is empty
             socket.emit('queue-empty');
         }
     });
 
+    socket.on('play-previous', ({ roomId }) => {
+        console.log(`Play previous requested in ${roomId}`);
+        const room = rooms[roomId];
+        if (!room) return;
+
+        if (room.history && room.history.length > 0) {
+            const prevId = room.history.pop();
+            
+            // Save current state to forward history so "Next" goes back to it
+            if (!room.forwardHistory) room.forwardHistory = [];
+            room.forwardHistory.push(room.currentVideoId);
+            
+            room.currentVideoId = prevId;
+            room.videoTime = 0;
+            room.isPlaying = true;
+            room.lastUpdate = Date.now();
+            
+            io.to(roomId).emit('sync-state', room);
+            io.to(roomId).emit('change-video', prevId);
+        }
+    });
+
+    socket.on('remove-from-queue', ({ roomId, index }) => {
+        if (rooms[roomId] && rooms[roomId].queue) {
+            rooms[roomId].queue.splice(index, 1);
+            io.to(roomId).emit('update-queue', rooms[roomId].queue);
+        }
+    });
+
     socket.on('add-to-queue', ({ roomId, video }) => {
-        if (!rooms[roomId]) rooms[roomId] = { queue: [], currentVideoId: 'dQw4w9WgXcQ' };
+        if (!rooms[roomId]) {
+             rooms[roomId] = { 
+                queue: [], 
+                history: [],
+                forwardHistory: [],
+                currentVideoId: null,
+                isPlaying: false,
+                videoTime: 0,
+                lastUpdate: Date.now()
+            };
+        }
         if (!rooms[roomId].queue) rooms[roomId].queue = [];
         rooms[roomId].queue.push(video);
         io.to(roomId).emit('update-queue', rooms[roomId].queue);
