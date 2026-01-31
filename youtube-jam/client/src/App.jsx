@@ -244,7 +244,8 @@ export default function JamRoom() {
 
             isRemoteUpdate.current = true;
             lastTimeRef.current = value; // Prevent echo
-const playing = (type === 'play' || type === 'seek') ? true : (type === 'pause' ? false : serverStateRef.current?.isPlaying);
+            // Fix: Only set playing=true if explicit 'play' event. 'seek' should respect current state.
+            const playing = (type === 'play') ? true : (type === 'pause' ? false : serverStateRef.current?.isPlaying);
             setIsPlaying(playing);
 
             if (serverStateRef.current) {
