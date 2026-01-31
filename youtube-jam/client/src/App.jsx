@@ -195,7 +195,6 @@ export default function JamRoom() {
                          player.seekTo(serverStateRef.current.videoTime, true);
                     }
                 }
-                }
 
             } catch (e) {
                 // Ignore player errors
