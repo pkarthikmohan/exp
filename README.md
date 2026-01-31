@@ -12,6 +12,8 @@
 
 JAM.LIVE is a real-time synchronized social music streaming application. It serves as a free, accessible alternative to premium "Jam" features found in major streaming platforms, allowing users to watch YouTube music videos together, manage shared queues, and chat in real-time.
 
+> **Why it stands out:** While competitors lock synchronized listening behind generic paywalls, JAM.LIVE makes social music completely frictionless—no accounts, no ads, no subscriptions.
+
 ## 🔗 Live Demo & Judging
 
 👉 **Launch Application:** [https://exp-62wo.onrender.com/](https://exp-62wo.onrender.com/)
