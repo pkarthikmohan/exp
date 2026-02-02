@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import YouTube from 'react-youtube';
 import EmojiPicker from 'emoji-picker-react';
-import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus as PlusIcon, SkipBack, SkipForward, Trash2, LogOut, Menu, X, UserCircle, Heart, Maximize, Smile, Image as ImageIcon } from 'lucide-react';
+import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus as PlusIcon, SkipBack, SkipForward, Trash2, LogOut, Menu, X, UserCircle, Heart, Maximize, Smile, Image as ImageIcon, Link as LinkIcon, Check } from 'lucide-react';
 import axios from 'axios';
 
 const socket = io();
@@ -38,6 +38,8 @@ export default function JamRoom() {
     const [duration, setDuration] = useState(0);
     const [currentTitle, setCurrentTitle] = useState("Loading...");
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const [isInvite, setIsInvite] = useState(false);
+    const [mobileTab, setMobileTab] = useState('chat'); // 'chat' | 'queue' | 'vibes'
     const playerRef = useRef(null);
     const videoContainerRef = useRef(null);
     const serverStateRef = useRef(null);
@@ -103,15 +105,26 @@ export default function JamRoom() {
         scrollToBottom();
     }, [messages]);
 
-    // Restore session on refresh
+    // Restore session on refresh OR handle invite link
     useEffect(() => {
-        const savedRoom = sessionStorage.getItem('jam_roomId');
-        const savedUser = sessionStorage.getItem('jam_username');
-        if (savedRoom && savedUser) {
-            setRoomId(savedRoom);
-            setUsername(savedUser);
-            socket.emit('join-room', { roomId: savedRoom, username: savedUser });
-            setInRoom(true);
+        const params = new URLSearchParams(window.location.search);
+        const roomParam = params.get('room');
+
+        if (roomParam) {
+            setRoomId(roomParam);
+            setIsInvite(true);
+            // Pre-fill name if available, but don't auto-join to allow user confirmation
+            const savedUser = sessionStorage.getItem('jam_username');
+            if (savedUser) setUsername(savedUser);
+        } else {
+            const savedRoom = sessionStorage.getItem('jam_roomId');
+            const savedUser = sessionStorage.getItem('jam_username');
+            if (savedRoom && savedUser) {
+                setRoomId(savedRoom);
+                setUsername(savedUser);
+                socket.emit('join-room', { roomId: savedRoom, username: savedUser });
+                setInRoom(true);
+            }
         }
     }, []);
     
@@ -517,10 +530,11 @@ export default function JamRoom() {
                         />
                         <input 
                             required 
-                            className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white" 
+                            className={`w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white ${isInvite ? 'opacity-50 cursor-not-allowed' : ''}`}
                             placeholder="Room ID (e.g. ChillVibes)" 
                             value={roomId}
-                            onChange={e => setRoomId(e.target.value)} 
+                            onChange={e => !isInvite && setRoomId(e.target.value)}
+                            readOnly={isInvite}
                         />
                         <button 
                             type="submit" 
@@ -605,7 +619,27 @@ export default function JamRoom() {
                         <Play fill="white" size={20} />
                     </div>
                     <h1 className="text-2xl font-black tracking-tighter hidden sm:block">JAM.<span className="text-purple-500">LIVE</span></h1>
-                    <span className="text-xs text-gray-500 whitespace-nowrap">Room: {roomId}</span>
+                    <button 
+                        onClick={() => {
+                            const url = `${window.location.origin}?room=${roomId}`;
+                            navigator.clipboard.writeText(url);
+                            const el = document.getElementById('room-id-display');
+                            if (el) {
+                                const original = el.innerText;
+                                el.innerText = "Link Copied!";
+                                el.classList.add("text-green-400");
+                                setTimeout(() => {
+                                    el.innerText = `Room: ${roomId}`;
+                                    el.classList.remove("text-green-400");
+                                }, 2000);
+                            }
+                        }}
+                        className="flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-purple-500/50 transition cursor-pointer group ml-2"
+                        title="Copy Invite Link"
+                    >
+                        <span id="room-id-display" className="text-xs text-gray-500 group-hover:text-purple-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
+                        <LinkIcon size={14} className="text-gray-600 group-hover:text-purple-500" />
+                    </button>
                 </div>
                 
                 <div className="flex-1 max-w-2xl w-full relative group">
@@ -867,40 +901,65 @@ export default function JamRoom() {
                         </button>
                     </div>
 
-                    <h2 className="text-xl font-bold mb-6 flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Suggested Vibes</h2>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                        {suggestedVideos.length > 0 ? suggestedVideos.map((vid, i) => (
-                            <div 
-                                key={i} 
-                                onClick={() => playNow(vid.id)} 
-                                className="group cursor-pointer relative"
-                            >
-                                <div className="aspect-video bg-white/5 rounded-2xl mb-3 overflow-hidden relative border border-white/5 group-hover:border-purple-500/50 transition">
-                                    <img src={vid.thumb || `https://img.youtube.com/vi/${vid.id}/mqdefault.jpg`} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" />
-                                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
-                                        <Play fill="white" size={32} />
+                    {/* Mobile Tabs */}
+                    <div className="flex lg:hidden bg-white/5 rounded-xl p-1 mb-6 border border-white/5">
+                        <button 
+                            onClick={() => setMobileTab('vibes')}
+                            className={`flex-1 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${mobileTab === 'vibes' ? 'bg-purple-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                        >
+                            <Play size={16} /> Vibes
+                        </button>
+                        <button 
+                            onClick={() => setMobileTab('chat')}
+                            className={`flex-1 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${mobileTab === 'chat' ? 'bg-purple-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                        >
+                            <MessageSquare size={16} /> Chat
+                        </button>
+                        <button 
+                            onClick={() => setMobileTab('queue')}
+                            className={`flex-1 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition ${mobileTab === 'queue' ? 'bg-purple-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                        >
+                            <ListMusic size={16} /> Playlist
+                        </button>
+                    </div>
+
+                    {/* Suggested Vibes (Desktop: Always Visible, Mobile: Only if tab active) */}
+                    <div className={`${mobileTab === 'vibes' ? 'block' : 'hidden'} lg:block`}>
+                        <h2 className="text-xl font-bold mb-6 flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Suggested Vibes</h2>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            {suggestedVideos.length > 0 ? suggestedVideos.map((vid, i) => (
+                                <div 
+                                    key={i} 
+                                    onClick={() => playNow(vid.id)} 
+                                    className="group cursor-pointer relative"
+                                >
+                                    <div className="aspect-video bg-white/5 rounded-2xl mb-3 overflow-hidden relative border border-white/5 group-hover:border-purple-500/50 transition">
+                                        <img src={vid.thumb || `https://img.youtube.com/vi/${vid.id}/mqdefault.jpg`} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" />
+                                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                                            <Play fill="white" size={32} />
+                                        </div>
+                                        <button 
+                                            onClick={(e) => addToQueue(vid.id, vid.title, e)}
+                                            className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-lg hover:bg-purple-600 transition z-10 opacity-0 group-hover:opacity-100"
+                                            title="Add to Queue"
+                                        >
+                                           <PlusIcon size={16} />
+                                        </button>
                                     </div>
-                                    <button 
-                                        onClick={(e) => addToQueue(vid.id, vid.title, e)}
-                                        className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-lg hover:bg-purple-600 transition z-10 opacity-0 group-hover:opacity-100"
-                                        title="Add to Queue"
-                                    >
-                                       <PlusIcon size={16} />
-                                    </button>
+                                    <h4 className="text-sm font-semibold truncate group-hover:text-purple-400 transition">{vid.title}</h4>
                                 </div>
-                                <h4 className="text-sm font-semibold truncate group-hover:text-purple-400 transition">{vid.title}</h4>
-                            </div>
-                        )) : (
-                            // Loading Skeleton or Fallback
-                            <p className="text-gray-500 col-span-3">Loading suggestions...</p>
-                        )}
+                            )) : (
+                                // Loading Skeleton or Fallback
+                                <p className="text-gray-500 col-span-3">Loading suggestions...</p>
+                            )}
+                        </div>
                     </div>
                 </div>
 
                 {/* Sidebar: Chat & Queue */}
-                <div className="col-span-12 lg:col-span-4 flex flex-col gap-6">
-                    {/* Chat Box */}
-                    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-4 flex flex-col h-[400px]">
+                <div className={`col-span-12 lg:col-span-4 flex flex-col gap-6 lg:block ${mobileTab !== 'vibes' ? 'block' : 'hidden'}`}>
+                    {/* Chat Box (Desktop: Always, Mobile: Only if tab active) */}
+                    <div className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-4 flex flex-col h-[400px] lg:flex ${mobileTab === 'chat' ? 'flex' : 'hidden lg:flex'} mb-6 lg:mb-6`}>
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="font-bold flex items-center gap-2"><MessageSquare size={18} className="text-purple-500" /> Chat Room</h3>
                         </div>
@@ -1025,8 +1084,8 @@ export default function JamRoom() {
                         </div>
                     </div>
 
-                    {/* Queue Box */}
-                    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-6 flex-1 h-[300px] overflow-hidden flex flex-col">
+                    {/* Queue Box (Desktop: Always, Mobile: Only if tab active) */}
+                    <div className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-6 flex-1 h-[300px] overflow-hidden flex-col lg:flex ${mobileTab === 'queue' ? 'flex' : 'hidden lg:flex'}`}>
                         <h3 className="font-bold flex items-center gap-2 mb-4"><ListMusic size={18} className="text-purple-500" /> Up Next</h3>
                         <div className="flex-1 overflow-y-auto space-y-3">
                             {queue.map((item, i) => (
