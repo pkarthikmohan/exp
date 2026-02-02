@@ -1139,7 +1139,9 @@ export default function JamRoom() {
                                         controls: 0,        // Hide default controls (progress bar, etc)
                                         rel: 0,             // Minimize recommendations
                                         iv_load_policy: 3,  // Hide annotations
-                                        disablekb: 1        // Disable default keyboard shortcuts
+                                        disablekb: 1,       // Disable default keyboard shortcuts
+                                        modestbranding: 1,  // Remove YouTube logo
+                                        fs: 0               // Remove native fullscreen button
                                     } 
                                 }} 
                                 className="w-full h-full"
