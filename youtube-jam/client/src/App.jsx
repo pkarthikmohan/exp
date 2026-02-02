@@ -762,13 +762,14 @@ export default function JamRoom() {
                         <Play fill="white" size={20} />
                     </div>
                     <h1 className="text-2xl font-black tracking-tighter hidden sm:block">JAM.<span className="text-purple-500">LIVE</span></h1>
+                    
+                    {/* Desktop Invite Link */}
                     <button 
-                        onClick={() => {
+                        onClick={(e) => {
                             const url = `${window.location.origin}?room=${roomId}`;
                             navigator.clipboard.writeText(url);
-                            const el = document.getElementById('room-id-display');
+                            const el = e.currentTarget.querySelector('span');
                             if (el) {
-                                const original = el.innerText;
                                 el.innerText = "Link Copied!";
                                 el.classList.add("text-green-400");
                                 setTimeout(() => {
@@ -777,11 +778,20 @@ export default function JamRoom() {
                                 }, 2000);
                             }
                         }}
-                        className="flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-purple-500/50 transition cursor-pointer group ml-2"
+                        className="hidden md:flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-purple-500/50 transition cursor-pointer group ml-2"
                         title="Copy Invite Link"
                     >
-                        <span id="room-id-display" className="text-xs text-gray-500 group-hover:text-purple-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
+                        <span className="text-xs text-gray-500 group-hover:text-purple-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
                         <LinkIcon size={14} className="text-gray-600 group-hover:text-purple-500" />
+                    </button>
+
+                    {/* Mobile Leave Button */}
+                    <button 
+                        onClick={handleLeave}
+                        className="md:hidden ml-auto flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 px-3 py-2 rounded-xl border border-red-500/20 transition group"
+                    >
+                        <LogOut size={16} />
+                        <span className="text-sm font-bold">Leave</span>
                     </button>
                 </div>
                 
@@ -804,15 +814,38 @@ export default function JamRoom() {
                     )}
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 justify-center w-full md:w-auto">
                     <div className="flex items-center gap-3 bg-white/5 px-4 py-2 rounded-2xl border border-white/10">
                         <Users size={16} className="text-purple-500" />
                         <span className="text-sm font-bold">{userCount} Listening</span>
                     </div>
                     
+                    {/* Mobile Invite Link */}
+                    <button 
+                        onClick={(e) => {
+                            const url = `${window.location.origin}?room=${roomId}`;
+                            navigator.clipboard.writeText(url);
+                            const el = e.currentTarget.querySelector('span');
+                            if (el) {
+                                el.innerText = "Link Copied!";
+                                el.classList.add("text-green-400");
+                                setTimeout(() => {
+                                    el.innerText = `Room: ${roomId}`;
+                                    el.classList.remove("text-green-400");
+                                }, 2000);
+                            }
+                        }}
+                        className="md:hidden flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-purple-500/50 transition cursor-pointer group"
+                        title="Copy Invite Link"
+                    >
+                        <span className="text-xs text-gray-500 group-hover:text-purple-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
+                        <LinkIcon size={14} className="text-gray-600 group-hover:text-purple-500" />
+                    </button>
+
+                    {/* Desktop Leave Button */}
                     <button 
                         onClick={handleLeave}
-                        className="flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 px-4 py-2 rounded-2xl border border-red-500/20 transition group"
+                        className="hidden md:flex items-center gap-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 px-4 py-2 rounded-2xl border border-red-500/20 transition group"
                     >
                         <LogOut size={16} className="group-hover:-translate-x-1 transition-transform" />
                         <span className="text-sm font-bold">Leave</span>
