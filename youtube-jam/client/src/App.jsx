@@ -6,8 +6,30 @@ import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus
 import axios from 'axios';
 import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, TouchSensor } from '@dnd-kit/core';
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 const socket = io();
+
+// --- COMPONENTS FOR DRAG & DROP ---
+function SortableItem(props) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: props.idString });
+    
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        zIndex: isDragging ? 50 : 'auto',
+        position: 'relative',
+    };
+
+    return (
+        <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+            {props.children}
+        </div>
+    );
+}
+// ----------------------------------
 
 const REACTION_GIFS = [
     { url: "https://media.giphy.com/media/GeimqsH0TLDt4tScGw/giphy.gif", name: "Vibe Cat" },
@@ -28,14 +50,49 @@ export default function JamRoom() {
     const [likedSongs, setLikedSongs] = useState([]);
     
     const [searchQuery, setSearchQuery] = useState("");
+    const [lowerSearchQuery, setLowerSearchQuery] = useState(""); // Independent search bar below
+    const [viewMode, setViewMode] = useState("vibes"); // 'vibes' or 'results'
     const [searchResults, setSearchResults] = useState([]);
     const [queue, setQueue] = useState([]);
+    const [relatedQueue, setRelatedQueue] = useState([]); // Auto-fetched recommendations
     const [suggestedVideos, setSuggestedVideos] = useState([]);
     const [messages, setMessages] = useState([]);
     const [inputMsg, setInputMsg] = useState("");
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('emoji');
     const [gifSearch, setGifSearch] = useState("");
+    
+    // DnD Sensors
+    const sensors = useSensors(
+        useSensor(PointerSensor),
+        useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }), // Long press for mobile drag
+        useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    );
+
+    const handleDragEnd = (event) => {
+        const { active, over } = event;
+        if (active.id !== over.id) {
+            setQueue((items) => {
+                // Check if it's Mobile (mq-) or Desktop (dq-) based on ID prefix
+                const prefix = active.id.startsWith('mq-') ? 'mq-' : 'dq-';
+                
+                // Reconstruct the IDs for the current items to find indices
+                const currentIds = items.map((item, i) => `${prefix}${i}-${item.id}`);
+                
+                const oldIndex = currentIds.indexOf(active.id);
+                const newIndex = currentIds.indexOf(over.id);
+                
+                if (oldIndex !== -1 && newIndex !== -1) {
+                    const newQueue = arrayMove(items, oldIndex, newIndex);
+                    // Emit reorder event
+                    socket.emit('reorder-queue', { roomId, newQueue });
+                    return newQueue;
+                }
+                return items;
+            });
+        }
+    };
+
     const [gifResults, setGifResults] = useState([]);
     const [currentVideoId, setCurrentVideoId] = useState(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -164,7 +221,7 @@ export default function JamRoom() {
                 const p = JSON.parse(savedProfile);
                 setUserProfile(p);
                 // Background fetch likes
-                axios.get(`http://localhost:5000/api/user/${p.googleId}/likes`).then(r => setLikedSongs(r.data)).catch(console.error);
+                axios.get(`/api/user/${p.googleId}/likes`).then(r => setLikedSongs(r.data)).catch(console.error);
             }
         } else {
             const savedRoom = sessionStorage.getItem('jam_roomId');
@@ -178,7 +235,7 @@ export default function JamRoom() {
                      const p = JSON.parse(savedProfile);
                      setUserProfile(p);
                      // Background fetch likes
-                     axios.get(`http://localhost:5000/api/user/${p.googleId}/likes`).then(r => setLikedSongs(r.data)).catch(console.error);
+                     axios.get(`/api/user/${p.googleId}/likes`).then(r => setLikedSongs(r.data)).catch(console.error);
                 }
                 socket.emit('join-room', { roomId: savedRoom, username: savedUser });
                 setInRoom(true);
@@ -199,6 +256,18 @@ export default function JamRoom() {
                 setProgress(currentTime);
                 setDuration(totalDuration);
                 
+                // Auto-play from queue logic
+                if (totalDuration > 0 && Math.abs(totalDuration - currentTime) < 1 && isPlaying) {
+                   // Video ending, check queue
+                   if (queue.length > 0) {
+                      // Player state change listener usually handles this on 'ended', 
+                      // but having a failsafe here
+                   } else if (relatedQueue.length > 0) {
+                      // Auto-play related if queue empty?
+                      // Wait for actual 'end' event.
+                   }
+                }
+
                 // --- Heartbeat: Tell server where we are occassionally ---
                 tickCount++;
                 if (tickCount % 4 === 0 && isPlaying) { // Every 2s
@@ -280,7 +349,7 @@ export default function JamRoom() {
             console.log("Google User:", decoded);
             
             // Sync with backend
-            const res = await axios.post('http://localhost:5000/api/auth', {
+            const res = await axios.post('/api/auth', {
                 googleId: decoded.sub,
                 name: decoded.name,
                 email: decoded.email,
@@ -315,7 +384,7 @@ export default function JamRoom() {
         if (!userProfile) return alert("Please sign in to like songs");
         
         try {
-             const res = await axios.post(`http://localhost:5000/api/user/${userProfile.googleId}/likes`, { video });
+             const res = await axios.post(`/api/user/${userProfile.googleId}/likes`, { video });
              setLikedSongs(res.data);
         } catch (e) {
             console.error("Like failed", e);
@@ -347,10 +416,23 @@ export default function JamRoom() {
         socket.on('update-queue', (newQueue) => setQueue(newQueue));
         socket.on('change-video', (vidId) => {
              setCurrentVideoId(vidId);
-             setSearchResults([]); // close search
+             // When video changes, fetch smart recommendations 
+             // but don't clear search if user is actively searching? 
+             // Requirement: "below you give the search results inplace of suggested vibes"
+             // But logic is: if user searches, we show results. If user just plays, maybe reset to vibes?
+             setViewMode('vibes'); 
              isRemoteUpdate.current = true; // prevent loop
+             
+             // Fetch smart queue
+             socket.emit('get-related', vidId);
         });
-        
+
+        socket.on('related-videos-result', (videos) => {
+             setRelatedQueue(videos);
+             // Also populate suggested Vibes for the vibes tab
+             setSuggestedVideos(videos.slice(0, 3));
+        });
+
         socket.on('video-action', ({ type, value }) => {
             if (type === 'time-update') {
                  // Silent update: Update our model of "Truth" so our local sync loop can react
@@ -457,7 +539,9 @@ export default function JamRoom() {
         });
 
         socket.on('related-videos', (videos) => {
+            console.log('Received related videos:', videos.length);
             setSuggestedVideos(videos);
+            setRelatedQueue(videos);
         });
 
         return () => {
@@ -480,17 +564,24 @@ export default function JamRoom() {
     }, [currentVideoId, inRoom]);
 
     // Real Search Logic
-    const handleSearch = async () => {
-        if (!searchQuery.trim()) return;
+    const handleSearch = async (query) => {
+        const q = typeof query === 'string' ? query : searchQuery;
+        if (!q || !q.trim()) return;
         try {
-            console.log('Searching for:', searchQuery);
-            const res = await axios.get(`/search?q=${encodeURIComponent(searchQuery)}`);
+            console.log('Searching for:', q);
+            const res = await axios.get('/search', { params: { q: q } });
             console.log('Search response:', res.data);
             setSearchResults(res.data);
+            setViewMode('results'); // Switch view mode to results
+            setMobileTab('vibes'); // Force mobile tab to 'vibes' to see results
         } catch (error) {
             console.error('Search failed:', error);
-            alert('Search failed. YouTube API might be blocked or key is invalid. Try pasting a YouTube URL instead.');
         }
+    };
+
+    const playRelated = (video) => {
+        // When clicking a related video (from vibes or queue suggestion)
+        playNow(video.id);
     };
 
     const sendMessage = () => {
@@ -510,8 +601,8 @@ export default function JamRoom() {
         // UNLOCK SYNC
         isRemoteUpdate.current = false;
         socket.emit('change-video', { roomId, videoId: vidId });
-        setSearchResults([]);
-        setSearchQuery("");
+        // setSearchResults([]); // User requested to keep search results visible
+        // setSearchQuery("");
     };
 
     const handlePrevious = () => {
@@ -867,34 +958,47 @@ export default function JamRoom() {
                                 <span className="w-2 h-6 bg-purple-500 rounded-full"></span> Search Results
                             </h2>
                             <button 
-                                onClick={() => setSearchResults([])}
+                                onClick={() => { setSearchResults([]); setSearchQuery(""); }}
                                 className="text-sm text-gray-400 hover:text-white transition"
                             >
                                 Clear
                             </button>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+                        {/* Modified to List Style as requested */}
+                        <div className="flex flex-col gap-2 mb-8">
                             {searchResults.map((video) => (
                                 <div 
                                     key={video.id} 
-                                    onClick={() => playNow(video.id)}
-                                    className="group cursor-pointer relative"
+                                    onClick={() => { 
+                                        playNow(video.id); 
+                                        setSearchResults([]); 
+                                        setSearchQuery("");
+                                        setViewMode('vibes');
+                                    }}
+                                    className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
                                 >
-                                    <div className="aspect-video bg-white/5 rounded-xl mb-2 overflow-hidden relative border border-white/5 group-hover:border-purple-500/50 transition">
+                                    <div className="w-16 h-10 rounded-lg overflow-hidden relative shrink-0">
                                         <img src={video.thumb} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" alt={video.title} />
                                         <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
-                                            <Play fill="white" size={32} />
+                                            <Play fill="white" size={16} />
                                         </div>
+                                    </div>
+                                    
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-sm font-medium truncate text-gray-200 group-hover:text-purple-400 transition">{video.title}</p>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition justify-end">
                                         <button 
                                             onClick={(e) => { e.stopPropagation(); handleLike(video); }}
-                                            className={`absolute top-2 left-2 p-1.5 backdrop-blur-md rounded-lg transition z-10 ${likedSongs.some(s => s.id === video.id) ? 'bg-pink-600 text-white' : 'bg-black/60 text-white hover:bg-pink-600'}`}
+                                            className={`p-1.5 rounded-lg transition ${likedSongs.some(s => s.id === video.id) ? 'text-pink-600' : 'text-gray-400 hover:text-pink-600'}`}
                                             title={likedSongs.some(s => s.id === video.id) ? "Unlike Song" : "Like Song"}
                                         >
                                            <Heart size={16} fill={likedSongs.some(s => s.id === video.id) ? "currentColor" : "none"} />
                                         </button>
                                         <button 
                                             onClick={(e) => addToQueue(video.id, video.title, e)}
-                                            className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-lg hover:bg-purple-600 transition z-10 text-white"
+                                            className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
                                             title="Add to Queue"
                                         >
                                            <PlusIcon size={16} />
@@ -1117,42 +1221,102 @@ export default function JamRoom() {
                           className="flex transition-transform duration-300 ease-in-out w-[300%]" 
                           style={{ transform: `translateX(-${['vibes', 'chat', 'queue'].indexOf(mobileTab) * (100/3)}%)` }}
                         >
-                            {/* Slide 1: Vibes */}
+                            {/* Slide 1: Content (Vibes or Results) */}
                             <div className="w-1/3 px-1 h-full min-h-[400px]">
-                                <h2 className="text-xl font-bold mb-6 flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Suggested Vibes</h2>
-                                <div className="grid grid-cols-2 gap-4">
-                                {suggestedVideos.length > 0 ? suggestedVideos.map((vid, i) => (
-                                    <div 
-                                        key={i} 
-                                        onClick={() => playNow(vid.id)} 
-                                        className="group cursor-pointer relative"
-                                    >
-                                        <div className="aspect-video bg-white/5 rounded-2xl mb-3 overflow-hidden relative border border-white/5 group-hover:border-purple-500/50 transition">
-                                            <img src={vid.thumb || `https://img.youtube.com/vi/${vid.id}/mqdefault.jpg`} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" />
-                                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
-                                                <Play fill="white" size={32} />
-                                            </div>
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); handleLike(vid); }}
-                                                className={`absolute top-2 left-2 p-1.5 backdrop-blur-md rounded-lg transition z-10 ${likedSongs.some(s => s.id === vid.id) ? 'bg-pink-600 text-white' : 'bg-black/60 text-white opacity-0 group-hover:opacity-100'}`}
-                                                title="Like Song"
-                                            >
-                                            <Heart size={16} fill={likedSongs.some(s => s.id === vid.id) ? "currentColor" : "none"} />
-                                            </button>
-                                            <button 
-                                                onClick={(e) => addToQueue(vid.id, vid.title, e)}
-                                                className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-lg hover:bg-purple-600 transition z-10 opacity-0 group-hover:opacity-100"
-                                                title="Add to Queue"
-                                            >
-                                            <PlusIcon size={16} />
-                                            </button>
+                                {viewMode === 'results' ? (
+                                    <>
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h2 className="text-xl font-bold flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Results</h2>
+                                            <button onClick={() => setViewMode('vibes')} className="text-xs text-gray-400 hover:text-white">Back to Suggestions</button>
                                         </div>
-                                        <h4 className="text-sm font-semibold truncate group-hover:text-purple-400 transition">{vid.title}</h4>
-                                    </div>
-                                )) : (
-                                    <p className="text-gray-500 col-span-3">Loading suggestions...</p>
+                                         <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-2 mb-4">
+                                            <Search size={16} className="text-gray-500" />
+                                            <input 
+                                                className="flex-1 bg-transparent border-none py-2 focus:outline-none placeholder-gray-500 text-sm" 
+                                                placeholder="Search more songs..." 
+                                                value={lowerSearchQuery}
+                                                onChange={e => setLowerSearchQuery(e.target.value)}
+                                                onKeyDown={e => e.key === 'Enter' && handleSearch(lowerSearchQuery)}
+                                            />
+                                        </div>
+                                        <div className="flex flex-col gap-2 overflow-y-auto max-h-[300px]">
+                                            {searchResults.map((video) => (
+                                                <div 
+                                                    key={video.id} 
+                                                    onClick={() => playNow(video.id)}
+                                                    className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
+                                                >
+                                                    <img src={video.thumb} className="w-12 h-12 rounded-lg object-cover shrink-0" alt={video.title} />
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-xs font-medium truncate text-gray-200">{video.title}</p>
+                                                    </div>
+                                                    
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); handleLike(video); }}
+                                                        className={`p-1.5 rounded-lg transition z-10 ${likedSongs.some(s => s.id === video.id) ? 'text-pink-500' : 'text-gray-600 hover:text-pink-500'}`}
+                                                    >
+                                                        <Heart size={14} fill={likedSongs.some(s => s.id === video.id) ? "currentColor" : "none"} />
+                                                    </button>
+                                                    <button 
+                                                        onClick={(e) => addToQueue(video.id, video.title, e)}
+                                                        className="p-1.5 rounded-lg text-gray-600 hover:text-white hover:bg-white/10 transition z-10"
+                                                    >
+                                                        <PlusIcon size={14} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <h2 className="text-xl font-bold mb-4 flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Suggested Vibes</h2>
+                                        
+                                        {/* Added Search Bar to Suggested Vibes View in Mobile */}
+                                        <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-2 mb-4">
+                                            <button onClick={() => handleSearch(lowerSearchQuery)}>
+                                                <Search size={16} className="text-gray-500 hover:text-white transition" />
+                                            </button>
+                                            <input 
+                                                className="flex-1 bg-transparent border-none py-2 focus:outline-none placeholder-gray-500 text-sm" 
+                                                placeholder="Search song..." 
+                                                value={lowerSearchQuery}
+                                                onChange={e => setLowerSearchQuery(e.target.value)}
+                                                onKeyDown={e => e.key === 'Enter' && handleSearch(lowerSearchQuery)}
+                                            />
+                                        </div>
+
+                                        <div className="flex flex-col gap-2 overflow-y-auto max-h-[400px]">
+                                        {suggestedVideos.length > 0 ? suggestedVideos.slice(0, 10).map((vid, i) => (
+                                             <div 
+                                                key={i} 
+                                                onClick={() => playRelated(vid)} 
+                                                className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
+                                            >
+                                                <img src={vid.thumb} className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-medium truncate text-gray-200">{vid.title}</p>
+                                                    <p className="text-[10px] text-gray-500 truncate">Suggested</p>
+                                                </div>
+                                                
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); handleLike(vid); }}
+                                                    className={`p-2 rounded-lg transition ${likedSongs.some(s => s.id === vid.id) ? 'text-pink-500' : 'text-gray-400 hover:text-pink-500'}`}
+                                                >
+                                                    <Heart size={16} fill={likedSongs.some(s => s.id === vid.id) ? "currentColor" : "none"} />
+                                                </button>
+                                                <button 
+                                                    onClick={(e) => addToQueue(vid.id, vid.title, e)}
+                                                    className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition"
+                                                >
+                                                    <PlusIcon size={16} />
+                                                </button>
+                                            </div>
+                                        )) : (
+                                            <p className="text-gray-500 col-span-2">{suggestedVideos.length === 0 && !currentVideoId ? "Play a song to get suggestions" : "Loading suggestions..."}</p>
+                                        )}
+                                        </div>
+                                    </>
                                 )}
-                                </div>
                             </div>
                             
                             {/* Slide 2: Chat */}
@@ -1217,39 +1381,75 @@ export default function JamRoom() {
                             <div className="w-1/3 px-1 h-full min-h-[400px]">
                                 <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-6 flex flex-col h-[400px]">
                                     <h3 className="font-bold flex items-center gap-2 mb-4"><ListMusic size={18} className="text-purple-500" /> Up Next</h3>
-                                    <div className="flex-1 overflow-y-auto space-y-3">
-                                        {queue.map((item, i) => (
-                                            <div 
-                                                key={i} 
-                                                onClick={() => playNow(item.id)}
-                                                className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
-                                            >
-                                                <img src={`https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-12 h-12 rounded-lg object-cover" />
-                                                <p className="text-xs font-medium truncate flex-1">{item.title}</p>
-                                                <Play size={12} className="opacity-0 group-hover:opacity-100 text-purple-500" />
-                                                
-                                                <button 
-                                                    onClick={(e) => { 
-                                                        e.stopPropagation(); 
-                                                        handleLike({ ...item, thumb: item.thumb || `https://img.youtube.com/vi/${item.id}/hqdefault.jpg` }); 
-                                                    }}
-                                                    className={`p-1.5 rounded-lg transition mr-1 z-10 ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-600 hover:text-pink-500'}`}
-                                                    title="Like"
-                                                >
-                                                    <Heart size={14} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
-                                                </button>
+                                    
+                                    <DndContext 
+                                        sensors={sensors} 
+                                        collisionDetection={closestCenter} 
+                                        onDragEnd={handleDragEnd}
+                                    >
+                                    <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+                                        <SortableContext items={queue.map((item, i) => `mq-${i}-${item.id}`)} strategy={verticalListSortingStrategy}>
+                                            {queue.map((item, i) => (
+                                                <SortableItem key={`mq-${i}-${item.id}`} idString={`mq-${i}-${item.id}`}>
+                                                    <div 
+                                                        onClick={() => playNow(item.id)}
+                                                        className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
+                                                    >
+                                                        <img src={`https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-12 h-12 rounded-lg object-cover" />
+                                                        <p className="text-xs font-medium truncate flex-1">{item.title}</p>
+                                                        <Play size={12} className="opacity-0 group-hover:opacity-100 text-purple-500" />
+                                                        
+                                                        <button 
+                                                            onClick={(e) => { 
+                                                                e.stopPropagation(); 
+                                                                handleLike({ ...item, thumb: item.thumb || `https://img.youtube.com/vi/${item.id}/hqdefault.jpg` }); 
+                                                            }}
+                                                            className={`p-1.5 rounded-lg transition mr-1 z-10 ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-600 hover:text-pink-500'}`}
+                                                            title="Like"
+                                                        >
+                                                            <Heart size={14} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
+                                                        </button>
 
-                                                <button 
-                                                    onClick={(e) => removeFromQueue(e, i)}
-                                                    className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-600 hover:text-red-500 transition ml-2 z-10"
-                                                    title="Remove"
-                                                >
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            </div>
-                                        ))}
-                                        {queue.length === 0 && <p className="text-center text-xs text-gray-500 mt-10">Queue is empty... <br/>Add some songs!</p>}
+                                                        <button 
+                                                            onClick={(e) => removeFromQueue(e, i)}
+                                                            className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-600 hover:text-red-500 transition ml-2 z-10"
+                                                            title="Remove"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    </div>
+                                                </SortableItem>
+                                            ))}
+                                        </SortableContext>
+                                        
+                                        {/* Auto-Queue Separator */}
+                                        {relatedQueue.length > 0 && (
+                                            <>
+                                                <div className="border-t border-white/5 my-4 pt-2">
+                                                    <p className="text-[10px] uppercase font-bold text-gray-500 mb-2">Recommended Next</p>
+                                                </div>
+                                                {relatedQueue.slice(0, 5).map((item, i) => (
+                                                     <div 
+                                                        key={`r-${i}`}
+                                                        onClick={() => playRelated(item)}
+                                                        className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer opacity-70 hover:opacity-100"
+                                                    >
+                                                        <img src={item.thumb || `https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-10 h-10 rounded-lg object-cover grayscale group-hover:grayscale-0 transition" />
+                                                        <p className="text-xs font-medium truncate flex-1 text-gray-400 group-hover:text-white transition">{item.title}</p>
+                                                        <button 
+                                                            onClick={(e) => addToQueue(item.id, item.title, e)} 
+                                                            className="p-1.5 bg-white/5 hover:bg-purple-600 rounded-lg transition"
+                                                        >
+                                                            <PlusIcon size={12} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </>
+                                        )}
+                                        
+                                        {queue.length === 0 && relatedQueue.length === 0 && <p className="text-center text-xs text-gray-500 mt-10">Queue is empty... <br/>Add some songs!</p>}
                                     </div>
+                                    </DndContext>
                                 </div>
                             </div>
 
@@ -1258,39 +1458,55 @@ export default function JamRoom() {
 
                     {/* Suggested Vibes (Desktop: Always Visible) */}
                     <div className="hidden lg:block">
-                        <h2 className="text-xl font-bold mb-6 flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Suggested Vibes</h2>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                            {suggestedVideos.length > 0 ? suggestedVideos.map((vid, i) => (
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-xl font-bold flex items-center gap-2 italic">
+                                <span className="w-2 h-6 bg-purple-500 rounded-full"></span> 
+                                {viewMode === 'results' ? "Search Results" : "Suggested Vibes"}
+                            </h2>
+                            {viewMode === 'results' && (
+                                <button onClick={() => setViewMode('vibes')} className="text-sm text-gray-400 hover:text-white transition">
+                                    Back to Suggestions
+                                </button>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            {(viewMode === 'results' ? searchResults : suggestedVideos).length > 0 ? (viewMode === 'results' ? searchResults : suggestedVideos).map((vid, i) => (
                                 <div 
                                     key={i} 
                                     onClick={() => playNow(vid.id)} 
-                                    className="group cursor-pointer relative"
+                                    className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
                                 >
-                                    <div className="aspect-video bg-white/5 rounded-2xl mb-3 overflow-hidden relative border border-white/5 group-hover:border-purple-500/50 transition">
+                                    <div className="w-16 h-10 rounded-lg overflow-hidden relative shrink-0">
                                         <img src={vid.thumb || `https://img.youtube.com/vi/${vid.id}/mqdefault.jpg`} className="w-full h-full object-cover group-hover:scale-110 transition duration-500" />
                                         <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
-                                            <Play fill="white" size={32} />
+                                            <Play fill="white" size={16} />
                                         </div>
+                                    </div>
+                                    
+                                    <div className="flex-1 min-w-0">
+                                        <h4 className="text-sm font-medium truncate text-gray-200 group-hover:text-purple-400 transition">{vid.title}</h4>
+                                    </div>
+
+                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                                         <button 
                                             onClick={(e) => { e.stopPropagation(); handleLike(vid); }}
-                                            className={`absolute top-2 left-2 p-1.5 backdrop-blur-md rounded-lg transition z-10 opacity-0 group-hover:opacity-100 ${likedSongs.some(s => s.id === vid.id) ? 'bg-pink-600 text-white' : 'bg-black/60 text-white hover:bg-pink-600'}`}
+                                            className={`p-1.5 rounded-lg transition ${likedSongs.some(s => s.id === vid.id) ? 'text-pink-600' : 'text-gray-400 hover:text-pink-600'}`}
                                             title="Like Song"
                                         >
-                                           <Heart size={16} fill={likedSongs.some(s => s.id === vid.id) ? "currentColor" : "none"} />
+                                           <Heart size={14} fill={likedSongs.some(s => s.id === vid.id) ? "currentColor" : "none"} />
                                         </button>
                                         <button 
                                             onClick={(e) => addToQueue(vid.id, vid.title, e)}
-                                            className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-lg hover:bg-purple-600 transition z-10 opacity-0 group-hover:opacity-100"
+                                            className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
                                             title="Add to Queue"
                                         >
-                                           <PlusIcon size={16} />
+                                           <PlusIcon size={14} />
                                         </button>
                                     </div>
-                                    <h4 className="text-sm font-semibold truncate group-hover:text-purple-400 transition">{vid.title}</h4>
                                 </div>
                             )) : (
                                 // Loading Skeleton or Fallback
-                                <p className="text-gray-500 col-span-3">Loading suggestions...</p>
+                                <p className="text-gray-500 col-span-2">{viewMode === 'results' ? "No results found." : "Loading suggestions..."}</p>
                             )}
                         </div>
                     </div>
@@ -1427,43 +1643,78 @@ export default function JamRoom() {
                     {/* Queue Box (Desktop: Always, Mobile: Only if tab active) */}
                     <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-6 flex-1 h-[300px] overflow-hidden flex flex-col">
                         <h3 className="font-bold flex items-center gap-2 mb-4"><ListMusic size={18} className="text-purple-500" /> Up Next</h3>
-                        <div className="flex-1 overflow-y-auto space-y-3">
-                            {queue.map((item, i) => (
-                                <div 
-                                    key={i} 
-                                    onClick={() => playNow(item.id)}
-                                    className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
-                                >
-                                    <img src={`https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-12 h-12 rounded-lg object-cover" />
-                                    <p className="text-xs font-medium truncate flex-1">{item.title}</p>
-                                    <Play size={12} className="opacity-0 group-hover:opacity-100 text-purple-500" />
-                                    
-                                    <button 
-                                        onClick={(e) => { 
-                                            e.stopPropagation(); 
-                                            handleLike({ ...item, thumb: item.thumb || `https://img.youtube.com/vi/${item.id}/hqdefault.jpg` }); 
-                                        }}
-                                        className={`p-1.5 rounded-lg transition mr-1 ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-600 hover:text-pink-500 opacity-0 group-hover:opacity-100'}`}
-                                        title="Like"
-                                    >
-                                        <Heart size={14} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
-                                    </button>
+                        
+                        <DndContext 
+                            sensors={sensors} 
+                            collisionDetection={closestCenter} 
+                            onDragEnd={handleDragEnd}
+                        >
+                            <div className="flex-1 overflow-y-auto space-y-3">
+                                <SortableContext items={queue.map((item, i) => `dq-${i}-${item.id}`)} strategy={verticalListSortingStrategy}>
+                                    {queue.map((item, i) => (
+                                        <SortableItem key={`dq-${i}-${item.id}`} idString={`dq-${i}-${item.id}`}>
+                                            <div 
+                                                onClick={() => playNow(item.id)}
+                                                className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer relative"
+                                            >
+                                                <img src={`https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-12 h-12 rounded-lg object-cover" />
+                                                <p className="text-xs font-medium truncate flex-1">{item.title}</p>
+                                                <Play size={12} className="opacity-0 group-hover:opacity-100 text-purple-500" />
+                                                
+                                                <button 
+                                                    onClick={(e) => { 
+                                                        e.stopPropagation(); 
+                                                        handleLike({ ...item, thumb: item.thumb || `https://img.youtube.com/vi/${item.id}/hqdefault.jpg` }); 
+                                                    }}
+                                                    className={`p-1.5 rounded-lg transition mr-1 z-10 ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-600 hover:text-pink-500'}`}
+                                                    title="Like"
+                                                >
+                                                    <Heart size={14} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
+                                                </button>
 
-                                    <button 
-                                        onClick={(e) => removeFromQueue(e, i)}
-                                        className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-600 hover:text-red-500 transition ml-2 z-10"
-                                        title="Remove"
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                </div>
-                            ))}
-                            {queue.length === 0 && <p className="text-center text-xs text-gray-500 mt-10">Queue is empty... <br/>Add some songs!</p>}
-                        </div>
+                                                <button 
+                                                    onClick={(e) => removeFromQueue(e, i)}
+                                                    className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-600 hover:text-red-500 transition ml-2 z-10"
+                                                    title="Remove"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        </SortableItem>
+                                    ))}
+                                </SortableContext>
+
+                                {/* Auto-Queue Separator */}
+                                {relatedQueue.length > 0 && (
+                                    <>
+                                        <div className="border-t border-white/5 my-4 pt-2">
+                                            <p className="text-[10px] uppercase font-bold text-gray-500 mb-2">Recommended Next</p>
+                                        </div>
+                                        {relatedQueue.slice(0, 10).map((item, i) => (
+                                            <div 
+                                                key={`r-${i}`}
+                                                onClick={() => playRelated(item)}
+                                                className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer opacity-70 hover:opacity-100"
+                                            >
+                                                <img src={item.thumb || `https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-10 h-10 rounded-lg object-cover grayscale group-hover:grayscale-0 transition" />
+                                                <p className="text-xs font-medium truncate flex-1 text-gray-400 group-hover:text-white transition">{item.title}</p>
+                                                <button 
+                                                    onClick={(e) => addToQueue(item.id, item.title, e)} 
+                                                    className="p-1.5 bg-white/5 hover:bg-purple-600 rounded-lg transition"
+                                                >
+                                                    <PlusIcon size={12} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </>
+                                )}
+
+                                {queue.length === 0 && relatedQueue.length === 0 && <p className="text-center text-xs text-gray-500 mt-10">Queue is empty... <br/>Add some songs!</p>}
+                            </div>
+                        </DndContext>
                     </div>
                 </div>
             </main>
         </div>
     );
 }
-
