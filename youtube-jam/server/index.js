@@ -130,7 +130,7 @@ const fetchAndEmitRelated = async (videoId, socket) => {
         let query = queries[0];
         console.log('Searching related with query:', query);
         
-        let videos = await YouTube.search(query, { limit: 20, type: 'video' });
+        let videos = await YouTube.search(query, { limit: 35, type: 'video' });
         
         const results = videos
             .filter(v => v.id !== videoId)
@@ -146,7 +146,7 @@ const fetchAndEmitRelated = async (videoId, socket) => {
                 
                 return !isSameSong;
             })
-            .slice(0, 10)
+            .slice(0, 25)
             .map(item => ({
                 id: item.id,
                 title: item.title,
@@ -154,9 +154,9 @@ const fetchAndEmitRelated = async (videoId, socket) => {
             }));
             
         // Fallback: If strict filtering killed everything, just show artist's other top songs
-        if (results.length < 4 && channelName) {
+        if (results.length < 5 && channelName) {
             console.log('Fallback to artist top songs...');
-            const artistMix = await YouTube.search(`${channelName} top songs`, { limit: 10, type: 'video' });
+            const artistMix = await YouTube.search(`${channelName} top songs`, { limit: 20, type: 'video' });
              const artistResults = artistMix
                 .filter(v => v.id !== videoId && !results.find(r => r.id === v.id))
                 .map(item => ({
@@ -177,6 +177,74 @@ const fetchAndEmitRelated = async (videoId, socket) => {
 
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
+
+    socket.on('get-related', async (arg) => {
+        try {
+            // Handle both string and object inputs
+            const videoId = typeof arg === 'object' ? arg.videoId : arg;
+            if (!videoId) return;
+
+            const video = await YouTube.getVideo(videoId);
+            let results = [];
+
+             // Helper to filter out non-music content
+            const isMusicOnly = (v) => {
+                const t = v.title.toLowerCase();
+                // Block Explicit Non-Music Types
+                const blockList = [
+                    'tutorial', 'how to', 'lesson', 'course', 'review', 'reaction', 'gameplay', 
+                    'walkthrough', 'unboxing', 'coding', 'programming', 'setup', 'install', 
+                    'explained', 'lecture', 'news', 'update', 'trailer', 'vlog'
+                ];
+                if (blockList.some(k => t.includes(k))) return false;
+                return true;
+            };
+            
+            if (video && video.related && video.related.length > 0) {
+                 results = video.related
+                    .filter(isMusicOnly)
+                    .map(v => ({
+                        id: v.id,
+                        title: v.title,
+                        thumb: v.thumbnail?.url || `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`,
+                        duration: v.durationFormatted,
+                        channel: v.channel?.name
+                    }));
+            } 
+            
+            // Fallback if related is empty or not enough
+            if (results.length < 5) {
+                const videoResults = await YouTube.search(videoId, { limit: 1, type: 'video' });
+                const sourceVideo = videoResults[0];
+                if(sourceVideo) {
+                    // Force "song" keyword in query to bias towards music
+                    const query = `songs similar to ${sourceVideo.title.replace(/\(.*\)|official video|lyrics/gi, '')}`;
+                    const videos = await YouTube.search(query, { limit: 30, type: 'video' });
+                    const searched = videos
+                        .filter(isMusicOnly)
+                        .map(v => ({
+                            id: v.id,
+                            title: v.title,
+                            thumb: v.thumbnail?.url, 
+                            duration: v.durationFormatted,
+                            channel: v.channel?.name
+                        }));
+                    results = [...results, ...searched].slice(0, 25);
+                }
+            }
+            
+            socket.emit('related-videos-result', results);
+        } catch(e) { console.error(e); }
+    });
+
+    socket.on('reorder-queue', ({ roomId, newQueue }) => {
+        if(rooms[roomId]) {
+            rooms[roomId].queue = newQueue;
+            io.to(roomId).emit('update-queue', newQueue);
+        }
+    });
+
+
 
     socket.on('join-room', ({ roomId, username }) => {
         socket.join(roomId);
