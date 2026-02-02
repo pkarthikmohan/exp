@@ -1029,6 +1029,9 @@ export default function JamRoom() {
                                 </div>
                             </div>
                             
+                            {/* Blocker for Watch Later / Share (Transparent, behind controls but above video) */}
+                            <div className="absolute top-0 right-0 w-32 h-24 z-[5]" />
+
                             <YouTube 
                                 key={currentVideoId}
                                 videoId={currentVideoId} 
@@ -1140,7 +1143,6 @@ export default function JamRoom() {
                                         rel: 0,             // Minimize recommendations
                                         iv_load_policy: 3,  // Hide annotations
                                         disablekb: 1,       // Disable default keyboard shortcuts
-                                        modestbranding: 1,  // Remove YouTube logo
                                         fs: 0               // Remove native fullscreen button
                                     } 
                                 }} 
