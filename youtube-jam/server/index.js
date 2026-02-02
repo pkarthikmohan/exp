@@ -5,10 +5,44 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const axios = require('axios');
 const YouTube = require('youtube-sr').default;
+const db = require('./db');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// --- Authentication & User Data ---
+
+// Login/Sync User
+app.post('/api/auth', (req, res) => {
+    const { googleId, name, email, picture } = req.body;
+    if (!googleId) return res.status(400).json({ error: "Missing googleId" });
+    
+    // Save or Update user info
+    const user = db.saveUser(googleId, { name, email, picture });
+    res.json(user);
+});
+
+// Get Likes
+app.get('/api/user/:id/likes', (req, res) => {
+    const { id } = req.params;
+    const likes = db.getLikes(id);
+    res.json(likes);
+});
+
+// Toggle Like
+app.post('/api/user/:id/likes', (req, res) => {
+    const { id } = req.params;
+    const { video } = req.body; // { id, title, thumb }
+    if (!video || !video.id) return res.status(400).json({ error: "Invalid video data" });
+
+    const updatedLikes = db.toggleLike(id, video);
+    if (!updatedLikes) return res.status(404).json({ error: "User not found" });
+    
+    res.json(updatedLikes);
+});
+// ---------------------------------
+
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
