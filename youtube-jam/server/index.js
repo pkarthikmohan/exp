@@ -246,7 +246,7 @@ io.on('connection', (socket) => {
 
 
 
-    socket.on('join-room', ({ roomId, username }) => {
+    socket.on('join-room', async ({ roomId, username }) => {
         socket.join(roomId);
         socket.username = username;
         socket.roomId = roomId;
@@ -265,11 +265,15 @@ io.on('connection', (socket) => {
         }
 
         // Get actual count of users in this room
-        const userCount = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+        const sockets = await io.in(roomId).fetchSockets();
+        const userCount = sockets.length;
+        const users = sockets.map(s => s.username).filter(u => u);
+
         console.log(`${username} joined room ${roomId}. Count: ${userCount}`);
         
         io.to(roomId).emit('room-update', { 
             userCount, 
+            users,
             message: `${username} joined the jam!` 
         });
 
@@ -490,12 +494,15 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('receive-message', msgObj);
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
         console.log('User disconnected:', socket.id);
         if (socket.roomId) {
-            const count = io.sockets.adapter.rooms.get(socket.roomId)?.size || 0;
+            const sockets = await io.in(socket.roomId).fetchSockets();
+            const count = sockets.length;
+            const users = sockets.map(s => s.username).filter(u => u);
+
             console.log(`Room ${socket.roomId} now has ${count} users`);
-            io.to(socket.roomId).emit('room-update', { userCount: count });
+            io.to(socket.roomId).emit('room-update', { userCount: count, users });
         }
     });
 });

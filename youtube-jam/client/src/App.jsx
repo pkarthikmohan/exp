@@ -1084,6 +1084,36 @@ export default function JamRoom() {
                 onTouchMove={onTouchMove}
                 onTouchEnd={onTouchEnd}
             >
+                {/* User List Dropdown */}
+                {showUserList && (
+                    <div 
+                        ref={userListRef}
+                        className="fixed top-24 right-4 z-50 w-72 bg-[#121216] border border-white/10 rounded-2xl shadow-2xl p-4 space-y-3 animate-fade-in"
+                    >
+                        <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                            <div className="flex items-center gap-2">
+                                <Users className="text-purple-500" size={16} />
+                                <h4 className="text-sm font-bold">Listeners ({users.length})</h4>
+                            </div>
+                            <button onClick={() => setShowUserList(false)} className="p-1 hover:text-white text-gray-400"><X size={14} /></button>
+                        </div>
+                        <div className="max-h-[300px] overflow-y-auto space-y-2 scrollbar-thin">
+                            {users.map((u, i) => (
+                                <div key={i} className="flex items-center gap-3 p-2 rounded-xl bg-white/5 hover:bg-white/10 transition group">
+                                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center border border-white/10">
+                                        <UserCircle size={18} className="text-gray-400" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-xs font-bold text-gray-200 truncate">{u === username ? `${u} (You)` : u}</p>
+                                        <p className="text-[10px] text-gray-500">Listening</p>
+                                    </div>
+                                    {u === username && <div className="w-2 h-2 rounded-full bg-green-500 shadow-lg shadow-green-500/50"></div>}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 {/* Liked Songs Sheet */}
                 {showLikedSheet && userProfile && (
                     <div 
