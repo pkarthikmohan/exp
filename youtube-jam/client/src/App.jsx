@@ -65,6 +65,16 @@ export default function JamRoom() {
     const [isDrawerOpen, setIsDrawerOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('emoji');
     const [gifSearch, setGifSearch] = useState("");
+    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+    useEffect(() => {
+        const handleMouseMove = (e) => {
+            setMousePos({ x: e.clientX, y: e.clientY });
+        };
+        
+        window.addEventListener('mousemove', handleMouseMove);
+        return () => window.removeEventListener('mousemove', handleMouseMove);
+    }, []);
     
     // DnD Sensors
     const sensors = useSensors(
@@ -785,8 +795,15 @@ export default function JamRoom() {
     // Landing Page (Entry Screen)
     if (!inRoom) {
         return (
-            <div className="min-h-screen bg-[#0a0a0c] flex items-center justify-center p-6">
-                <div className="bg-white/5 border border-white/10 p-8 rounded-[2.5rem] w-full max-w-md backdrop-blur-xl">
+            <div className="min-h-screen bg-[#0a0a0c] flex items-center justify-center p-6 relative overflow-hidden">
+                {/* Mouse Hover Glow (Desktop Only) */}
+                <div 
+                    className="hidden lg:block pointer-events-none fixed inset-0 z-0 transition-opacity duration-300"
+                    style={{
+                        background: `radial-gradient(600px circle at ${mousePos.x}px ${mousePos.y}px, rgba(168, 85, 247, 0.45), transparent 80%)`
+                    }}
+                />
+                <div className="bg-white/5 border border-white/10 p-8 rounded-[2.5rem] w-full max-w-md backdrop-blur-xl relative z-10">
                     <div className="text-center mb-6">
                         <div className="w-16 h-16 bg-gradient-to-tr from-purple-600 to-pink-500 rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/20 mx-auto mb-4">
                             <Play fill="white" size={32} />
@@ -869,7 +886,15 @@ export default function JamRoom() {
 
     // Main App UI
     return (
-        <div className="min-h-screen bg-[#0f0f13] text-gray-100 p-4 md:p-8 font-sans">
+        <div className="min-h-screen bg-[#0f0f13] text-gray-100 p-4 md:p-8 font-sans relative">
+            {/* Mouse Hover Glow (Desktop Only) */}
+            <div 
+                className="hidden lg:block pointer-events-none fixed inset-0 z-0 transition-opacity duration-300"
+                style={{
+                    background: `radial-gradient(800px circle at ${mousePos.x}px ${mousePos.y}px, rgba(147, 51, 234, 0.25), transparent 80%)`
+                }}
+            />
+
             {/* Sidebar Menu Overlay */}
             <div 
                 className={`fixed inset-0 z-50 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${isMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
@@ -978,7 +1003,12 @@ export default function JamRoom() {
                         title="Copy Invite Link"
                     >
                         <span className="text-xs text-gray-500 group-hover:text-green-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
-                        <LinkIcon size={14} className="text-gray-600 group-hover:text-green-500" />
+                        <LinkIcon size={14} className="text-gray-600 group-hover:hidden transition-all" />
+                        <div className="hidden group-hover:flex gap-0.5 items-end h-3 transition-all">
+                            <div className="w-1 bg-green-500 rounded-full animate-dance" style={{ animationDelay: '0s' }}></div>
+                            <div className="w-1 bg-green-500 rounded-full animate-dance" style={{ animationDelay: '0.1s' }}></div>
+                            <div className="w-1 bg-green-500 rounded-full animate-dance" style={{ animationDelay: '0.2s' }}></div>
+                        </div>
                     </button>
 
                     {/* Mobile Leave Button */}
@@ -1038,7 +1068,12 @@ export default function JamRoom() {
                         title="Copy Invite Link"
                     >
                         <span className="text-xs text-gray-500 group-hover:text-green-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
-                        <LinkIcon size={14} className="text-gray-600 group-hover:text-green-500" />
+                        <LinkIcon size={14} className="text-gray-600 group-hover:hidden transition-all" />
+                        <div className="hidden group-hover:flex gap-0.5 items-end h-3 transition-all">
+                            <div className="w-1 bg-green-500 rounded-full animate-dance" style={{ animationDelay: '0s' }}></div>
+                            <div className="w-1 bg-green-500 rounded-full animate-dance" style={{ animationDelay: '0.1s' }}></div>
+                            <div className="w-1 bg-green-500 rounded-full animate-dance" style={{ animationDelay: '0.2s' }}></div>
+                        </div>
                     </button>
 
                     {/* Desktop Leave Button */}
