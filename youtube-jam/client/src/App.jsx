@@ -6,7 +6,7 @@ import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus
 import axios from 'axios';
 import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
-import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, TouchSensor } from '@dnd-kit/core';
+import { DndContext, closestCenter, KeyboardSensor, MouseSensor, PointerSensor, useSensor, useSensors, TouchSensor } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -21,6 +21,7 @@ function SortableItem(props) {
         transition,
         zIndex: isDragging ? 50 : 'auto',
         position: 'relative',
+        touchAction: 'none', // Prevent scrolling while dragging
     };
 
     return (
@@ -46,8 +47,11 @@ export default function JamRoom() {
     const [username, setUsername] = useState("");
     
     const [userCount, setUserCount] = useState(0);
+    const [users, setUsers] = useState([]); // List of connected users
+    const [showUserList, setShowUserList] = useState(false); // Toggle user list dropdown
     const [userProfile, setUserProfile] = useState(null); // { googleId, name, email, picture, likes: [] }
     const [likedSongs, setLikedSongs] = useState([]);
+    const [showLikedSheet, setShowLikedSheet] = useState(false);
     
     const [searchQuery, setSearchQuery] = useState("");
     const [lowerSearchQuery, setLowerSearchQuery] = useState(""); // Independent search bar below
@@ -64,8 +68,8 @@ export default function JamRoom() {
     
     // DnD Sensors
     const sensors = useSensors(
-        useSensor(PointerSensor),
-        useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }), // Long press for mobile drag
+        useSensor(MouseSensor, { activationConstraint: { distance: 8 } }), // Mouse: Drag needs 8px movement, allowing clicks
+        useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }), // Touch: Drag needs hold, allowing simple taps
         useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
     );
 
@@ -144,12 +148,36 @@ export default function JamRoom() {
     const chatContainerRef = useRef(null);
     const mobileChatRef = useRef(null);
     const drawerRef = useRef(null);
+    const mobileDrawerRef = useRef(null);
+    const userListRef = useRef(null);
+    const likedSheetRef = useRef(null);
 
-    // Click Outside Handler for Emoji Drawer
+    const normalizeVideo = (video) => ({
+        id: video.id,
+        title: video.title || currentTitle || "Untitled",
+        thumb: video.thumb || `https://img.youtube.com/vi/${video.id}/hqdefault.jpg`
+    });
+
+    const persistLikedSongs = (songs) => {
+        if (userProfile || sessionStorage.getItem('jam_user_profile')) {
+            sessionStorage.setItem('jam_liked_songs', JSON.stringify(songs));
+        }
+    };
+
+    // Click Outside Handler for Emoji Drawer & User List
     useEffect(() => {
         const handleClickOutside = (event) => {
-            if (drawerRef.current && !drawerRef.current.contains(event.target) && !event.target.closest('.drawer-toggle')) {
+            const clickedInsideMobile = mobileDrawerRef.current && mobileDrawerRef.current.contains(event.target);
+            const clickedInsideDesktop = drawerRef.current && drawerRef.current.contains(event.target);
+            
+            if (!clickedInsideMobile && !clickedInsideDesktop && !event.target.closest('.drawer-toggle')) {
                 setIsDrawerOpen(false);
+            }
+            if (userListRef.current && !userListRef.current.contains(event.target) && !event.target.closest('.user-list-toggle')) {
+                setShowUserList(false);
+            }
+            if (likedSheetRef.current && !likedSheetRef.current.contains(event.target) && !event.target.closest('.liked-sheet-toggle')) {
+                setShowLikedSheet(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -213,15 +241,30 @@ export default function JamRoom() {
         if (roomParam) {
             setRoomId(roomParam);
             setIsInvite(true);
-            // Pre-fill name if available, but don't auto-join to allow user confirmation
+            // Pre-fill name if available
             const savedUser = sessionStorage.getItem('jam_username');
             const savedProfile = sessionStorage.getItem('jam_user_profile');
             if (savedUser) setUsername(savedUser);
             if (savedProfile) {
-                const p = JSON.parse(savedProfile);
-                setUserProfile(p);
-                // Background fetch likes
-                axios.get(`/api/user/${p.googleId}/likes`).then(r => setLikedSongs(r.data)).catch(console.error);
+                try {
+                    const p = JSON.parse(savedProfile);
+                    // CRITICAL FIX: Check if profile is valid (has googleId). If not, clear it.
+                    if (p && p.googleId) {
+                        setUserProfile(p);
+                        const savedLikes = sessionStorage.getItem('jam_liked_songs');
+                        if (savedLikes) setLikedSongs(JSON.parse(savedLikes));
+                        axios.get(`/api/user/${p.googleId}/likes`).then(r => {
+                            setLikedSongs(r.data);
+                            persistLikedSongs(r.data);
+                        }).catch(console.error);
+                    } else {
+                        console.warn("Corrupted profile detected, clearing session.");
+                        sessionStorage.removeItem('jam_user_profile');
+                        sessionStorage.removeItem('jam_liked_songs');
+                    }
+                } catch (e) {
+                    sessionStorage.removeItem('jam_user_profile');
+                }
             }
         } else {
             const savedRoom = sessionStorage.getItem('jam_roomId');
@@ -232,10 +275,25 @@ export default function JamRoom() {
                 setRoomId(savedRoom);
                 setUsername(savedUser);
                 if (savedProfile) {
-                     const p = JSON.parse(savedProfile);
-                     setUserProfile(p);
-                     // Background fetch likes
-                     axios.get(`/api/user/${p.googleId}/likes`).then(r => setLikedSongs(r.data)).catch(console.error);
+                     try {
+                        const p = JSON.parse(savedProfile);
+                        // CRITICAL FIX: Validation
+                        if (p && p.googleId) {
+                            setUserProfile(p);
+                            const savedLikes = sessionStorage.getItem('jam_liked_songs');
+                            if (savedLikes) setLikedSongs(JSON.parse(savedLikes));
+                            axios.get(`/api/user/${p.googleId}/likes`).then(r => {
+                                setLikedSongs(r.data);
+                                persistLikedSongs(r.data);
+                            }).catch(console.error);
+                        } else {
+                            console.warn("Corrupted profile detected, clearing session.");
+                            sessionStorage.removeItem('jam_user_profile');
+                            sessionStorage.removeItem('jam_liked_songs');
+                        }
+                     } catch (e) {
+                         sessionStorage.removeItem('jam_user_profile');
+                     }
                 }
                 socket.emit('join-room', { roomId: savedRoom, username: savedUser });
                 setInRoom(true);
@@ -356,10 +414,19 @@ export default function JamRoom() {
                 picture: decoded.picture
             });
 
-            setUserProfile(res.data);
-            setUsername(res.data.name);
-            setLikedSongs(res.data.likes || []);
-            // Assuming the join button will be clicked next or auto-join via state
+            // Ensure googleId is part of the state and saved immediately
+            const profileData = { ...res.data, googleId: decoded.sub };
+            setUserProfile(profileData);
+            setUsername(profileData.name);
+            setLikedSongs(profileData.likes || []);
+            
+            // FIX: Persist immediately to prevent loss of googleId on refresh
+            sessionStorage.setItem('jam_user_profile', JSON.stringify(profileData));
+            sessionStorage.setItem('jam_username', profileData.name);
+            if (profileData.likes) {
+                sessionStorage.setItem('jam_liked_songs', JSON.stringify(profileData.likes));
+            }
+            
         } catch (error) {
             console.error("Login Failed", error);
         }
@@ -382,12 +449,32 @@ export default function JamRoom() {
     // Toggle Like Song
     const handleLike = async (video) => {
         if (!userProfile) return alert("Please sign in to like songs");
+        if (!userProfile.googleId) {
+            // Fallback for weird edge cases
+            alert("Session invalid. Please sign out and sign in again.");
+            return;
+        }
         
+        const normalized = normalizeVideo(video);
+        const alreadyLiked = likedSongs.some(s => s.id === normalized.id);
+        const optimistic = alreadyLiked 
+            ? likedSongs.filter(s => s.id !== normalized.id) 
+            : [...likedSongs, normalized];
+
+        setLikedSongs(optimistic);
+        persistLikedSongs(optimistic);
+
         try {
-             const res = await axios.post(`/api/user/${userProfile.googleId}/likes`, { video });
-             setLikedSongs(res.data);
+             const res = await axios.post(`/api/user/${userProfile.googleId}/likes`, { video: normalized, action: alreadyLiked ? 'remove' : 'add' });
+             if (res.data) {
+                 setLikedSongs(res.data);
+                 persistLikedSongs(res.data);
+             }
         } catch (e) {
             console.error("Like failed", e);
+            // revert optimistic update
+            setLikedSongs(alreadyLiked ? [...likedSongs] : likedSongs.filter(s => s.id !== normalized.id));
+            persistLikedSongs(alreadyLiked ? [...likedSongs] : likedSongs.filter(s => s.id !== normalized.id));
         }
     };
 
@@ -407,6 +494,7 @@ export default function JamRoom() {
         socket.on('room-update', (data) => {
             console.log('Room update:', data);
             setUserCount(data.userCount);
+            if (data.users) setUsers(data.users);
             if (data.message) {
                 setMessages(prev => [...prev, { user: 'System', message: data.message, id: Date.now() }]);
             }
@@ -740,6 +828,7 @@ export default function JamRoom() {
                                     setUserProfile(null);
                                     setUsername("");
                                     setLikedSongs([]);
+                                    sessionStorage.removeItem('jam_liked_songs');
                                 }}
                                 className="p-2 hover:bg-white/10 rounded-full transition text-gray-400 hover:text-white"
                                 title="Sign Out"
@@ -816,15 +905,31 @@ export default function JamRoom() {
                 </div>
 
                 <nav className="space-y-2 flex-1">
-                    <button className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-white/5 transition text-gray-300 hover:text-white group">
+                    <button 
+                        onClick={() => userProfile ? alert(`Logged in as:\n${userProfile.name}\n${userProfile.email}`) : alert("Please sign in first.")}
+                        className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-white/5 transition text-gray-300 hover:text-white group"
+                    >
                         <UserCircle className="group-hover:text-purple-500 transition" />
                         <span className="font-medium">My Profile</span>
                     </button>
-                    <button className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-white/5 transition text-gray-300 hover:text-white group">
+                    <button 
+                        className="liked-sheet-toggle w-full flex items-center gap-4 p-4 rounded-xl hover:bg-white/5 transition text-gray-300 hover:text-white group"
+                        onClick={() => {
+                            if (userProfile) {
+                                setShowLikedSheet(true);
+                                setIsMenuOpen(false);
+                            } else {
+                                alert("Please sign in to view liked songs");
+                            }
+                        }}
+                    >
                         <Heart className="group-hover:text-pink-500 transition" />
                         <span className="font-medium">Liked Songs</span>
                     </button>
-                    <button className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-white/5 transition text-gray-300 hover:text-white group">
+                    <button 
+                        onClick={() => alert("Saved Playlists coming soon!")}
+                        className="w-full flex items-center gap-4 p-4 rounded-xl hover:bg-white/5 transition text-gray-300 hover:text-white group"
+                    >
                         <ListMusic className="group-hover:text-blue-500 transition" />
                         <span className="font-medium">My Playlists</span>
                     </button>
@@ -869,11 +974,11 @@ export default function JamRoom() {
                                 }, 2000);
                             }
                         }}
-                        className="hidden md:flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-purple-500/50 transition cursor-pointer group ml-2"
+                        className="hidden md:flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-green-500/50 transition cursor-pointer group ml-2"
                         title="Copy Invite Link"
                     >
-                        <span className="text-xs text-gray-500 group-hover:text-purple-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
-                        <LinkIcon size={14} className="text-gray-600 group-hover:text-purple-500" />
+                        <span className="text-xs text-gray-500 group-hover:text-green-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
+                        <LinkIcon size={14} className="text-gray-600 group-hover:text-green-500" />
                     </button>
 
                     {/* Mobile Leave Button */}
@@ -906,10 +1011,13 @@ export default function JamRoom() {
                 </div>
 
                 <div className="flex items-center gap-2 justify-center w-full md:w-auto">
-                    <div className="flex items-center gap-3 bg-white/5 px-4 py-2 rounded-2xl border border-white/10">
+                    <button 
+                        onClick={() => setShowUserList(!showUserList)}
+                        className="user-list-toggle flex items-center gap-3 bg-white/5 px-4 py-2 rounded-2xl border border-white/10 hover:bg-white/10 transition cursor-pointer"
+                    >
                         <Users size={16} className="text-purple-500" />
                         <span className="text-sm font-bold">{userCount} Listening</span>
-                    </div>
+                    </button>
                     
                     {/* Mobile Invite Link */}
                     <button 
@@ -926,11 +1034,11 @@ export default function JamRoom() {
                                 }, 2000);
                             }
                         }}
-                        className="md:hidden flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-purple-500/50 transition cursor-pointer group"
+                        className="md:hidden flex items-center gap-2 bg-white/5 hover:bg-white/10 py-2 px-3 rounded-xl border border-white/5 hover:border-green-500/50 transition cursor-pointer group"
                         title="Copy Invite Link"
                     >
-                        <span className="text-xs text-gray-500 group-hover:text-purple-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
-                        <LinkIcon size={14} className="text-gray-600 group-hover:text-purple-500" />
+                        <span className="text-xs text-gray-500 group-hover:text-green-400 font-mono whitespace-nowrap transition-colors">Room: {roomId}</span>
+                        <LinkIcon size={14} className="text-gray-600 group-hover:text-green-500" />
                     </button>
 
                     {/* Desktop Leave Button */}
@@ -950,6 +1058,58 @@ export default function JamRoom() {
                 onTouchMove={onTouchMove}
                 onTouchEnd={onTouchEnd}
             >
+                {/* Liked Songs Sheet */}
+                {showLikedSheet && userProfile && (
+                    <div 
+                        ref={likedSheetRef}
+                        className="fixed top-24 right-4 z-50 w-80 bg-[#121216] border border-white/10 rounded-2xl shadow-2xl p-4 space-y-3 animate-fade-in"
+                    >
+                        <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                            <div className="flex items-center gap-2">
+                                <Heart className="text-pink-500" size={16} />
+                                <h4 className="text-sm font-bold">Liked Songs</h4>
+                            </div>
+                            <button onClick={() => setShowLikedSheet(false)} className="p-1 hover:text-white text-gray-400"><X size={14} /></button>
+                        </div>
+                        <div className="max-h-[320px] overflow-y-auto space-y-2 scrollbar-thin">
+                            {likedSongs.length > 0 ? likedSongs.map((song, i) => (
+                                <div 
+                                    key={`${song.id}-${i}`} 
+                                    className="flex items-center gap-3 p-2 rounded-xl bg-white/5 hover:bg-white/10 transition"
+                                >
+                                    <img src={song.thumb || `https://img.youtube.com/vi/${song.id}/default.jpg`} className="w-12 h-12 rounded-lg object-cover" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="text-xs font-semibold text-gray-200 truncate">{song.title}</p>
+                                    </div>
+                                    <button 
+                                        onClick={() => playNow(song.id)}
+                                        className="p-1.5 rounded-lg hover:bg-purple-600 text-white bg-purple-500/70 transition"
+                                        title="Play"
+                                    >
+                                        <Play size={14} />
+                                    </button>
+                                    <button 
+                                        onClick={(e) => addToQueue(song.id, song.title, e)}
+                                        className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 transition"
+                                        title="Add to Queue"
+                                    >
+                                        <PlusIcon size={14} />
+                                    </button>
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); handleLike(song); }}
+                                        className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-500 transition ml-1"
+                                        title="Remove from Liked"
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
+                                </div>
+                            )) : (
+                                <p className="text-xs text-gray-500 text-center py-4">No liked songs yet.</p>
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 {/* Search Results */}
                 {searchResults.length > 0 && (
                     <div className="col-span-12">
@@ -1152,6 +1312,19 @@ export default function JamRoom() {
                         )}
                     </div>
 
+                    <div className="flex items-center justify-between px-4 mb-4 mt-2">
+                        <div className="flex-1 min-w-0 mr-4">
+                            <h2 className="text-xl font-bold truncate text-white leading-tight">{currentTitle}</h2>
+                            <p className="text-sm font-medium text-gray-400">Now Playing</p>
+                        </div>
+                        <button 
+                            onClick={() => handleLike({ id: currentVideoId, title: currentTitle })}
+                            className={`p-3 rounded-full transition-all duration-300 ${likedSongs.some(s => s.id === currentVideoId) ? 'bg-pink-500/20 text-pink-500 scale-110' : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10'}`}
+                        >
+                            <Heart size={24} className={likedSongs.some(s => s.id === currentVideoId) ? "fill-current" : ""} />
+                        </button>
+                    </div>
+
                     {/* Progress Bar */}
                     <div className="flex items-center gap-3 mb-6 px-4">
                         <span className="text-xs font-mono text-gray-400 min-w-[40px] text-right">{formatTime(progress)}</span>
@@ -1195,6 +1368,7 @@ export default function JamRoom() {
                         >
                             <SkipForward size={28} className="fill-white/20 group-hover:fill-white transition-all" />
                         </button>
+
                     </div>
 
                     {/* Mobile Tabs */}
@@ -1303,8 +1477,13 @@ export default function JamRoom() {
                                                 </div>
                                                 
                                                 <button 
-                                                    onClick={(e) => { e.stopPropagation(); handleLike(vid); }}
+                                                    onClick={(e) => { 
+                                                        e.stopPropagation(); 
+                                                        handleLike(vid); 
+                                                    }}
                                                     className={`p-2 rounded-lg transition ${likedSongs.some(s => s.id === vid.id) ? 'text-pink-500' : 'text-gray-400 hover:text-pink-500'}`}
+                                                    title="Like"
+                                                    onPointerDown={(e) => e.stopPropagation()}
                                                 >
                                                     <Heart size={16} fill={likedSongs.some(s => s.id === vid.id) ? "currentColor" : "none"} />
                                                 </button>
@@ -1325,7 +1504,7 @@ export default function JamRoom() {
                             
                             {/* Slide 2: Chat */}
                             <div className="w-1/3 px-1 h-full min-h-[400px]">
-                                <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-4 flex flex-col h-[400px]">
+                                <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-4 flex flex-col h-[400px] relative">
                                     <div className="flex items-center justify-between mb-4">
                                         <h3 className="font-bold flex items-center gap-2"><MessageSquare size={18} className="text-purple-500" /> Chat Room</h3>
                                     </div>
@@ -1359,6 +1538,77 @@ export default function JamRoom() {
                                         ))}
                                     </div>
                                     
+                                    {/* Mobile Emoji Drawer */}
+                                    {isDrawerOpen && (
+                                        <div ref={mobileDrawerRef} className="absolute bottom-16 left-2 right-2 z-50 bg-[#1e1e24] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[320px]">
+                                            {/* Tabs */}
+                                            <div className="flex border-b border-white/10 shrink-0">
+                                                <button 
+                                                    className={`flex-1 p-3 text-sm font-bold transition flex items-center justify-center gap-2 ${activeTab === 'emoji' ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5'}`}
+                                                    onClick={() => setActiveTab('emoji')}
+                                                >
+                                                    <Smile size={16} /> Emojis
+                                                </button>
+                                                <button 
+                                                    className={`flex-1 p-3 text-sm font-bold transition flex items-center justify-center gap-2 ${activeTab === 'gif' ? 'bg-white/10 text-white' : 'text-gray-400 hover:bg-white/5'}`}
+                                                    onClick={() => setActiveTab('gif')}
+                                                >
+                                                    <ImageIcon size={16} /> GIFs
+                                                </button>
+                                            </div>
+                                    
+                                            {/* Content */}
+                                            <div className="flex-1 overflow-y-auto p-2 scrollbar-thin">
+                                                {activeTab === 'emoji' ? (
+                                                     <EmojiPicker 
+                                                        theme="dark"
+                                                        width="100%"
+                                                        height="100%"
+                                                        searchDisabled
+                                                        skinTonesDisabled
+                                                        previewConfig={{ showPreview: false }}
+                                                        onEmojiClick={(e) => {
+                                                            setInputMsg(prev => prev + e.emoji);
+                                                        }} 
+                                                    />
+                                                ) : (
+                                                    <div className="flex flex-col h-full">
+                                                        <div className="p-2 sticky top-0 bg-[#1e1e24] z-10">
+                                                            <div className="flex items-center bg-white/5 rounded-lg border border-white/10 px-2">
+                                                                <Search size={14} className="text-gray-400 shrink-0" />
+                                                                <input 
+                                                                    className="w-full bg-transparent border-none p-2 text-xs text-white placeholder-gray-500 focus:outline-none"
+                                                                    placeholder="Search GIFs..."
+                                                                    value={gifSearch}
+                                                                    onChange={(e) => {
+                                                                        setGifSearch(e.target.value);
+                                                                        searchGifs(e.target.value);
+                                                                    }}
+                                                                />
+                                                                {gifSearch && <button onClick={() => { setGifSearch(''); setGifResults([]); }}><X size={14} className="text-gray-400 hover:text-white shrink-0" /></button>}
+                                                            </div>
+                                                        </div>
+                                                        <div className="columns-2 gap-2 p-2 pt-0 overflow-y-auto scrollbar-thin">
+                                                             {(gifResults.length > 0 ? gifResults : REACTION_GIFS).map((g, i) => (
+                                                                <button 
+                                                                    key={i} 
+                                                                    onClick={() => {
+                                                                        socket.emit('send-message', { roomId, message: `AG_GIF::${g.url}`, user: username });
+                                                                        setIsDrawerOpen(false);
+                                                                    }}
+                                                                    className="relative group w-full mb-2 rounded-lg overflow-hidden border border-white/5 hover:border-purple-500 transition break-inside-avoid"
+                                                                >
+                                                                    <img src={g.url} className="w-full h-auto object-cover" loading="lazy" />
+                                                                    <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-[10px] text-center py-1 opacity-0 group-hover:opacity-100 transition whitespace-nowrap overflow-hidden px-1">{g.name || 'GIF'}</span>
+                                                                </button>
+                                                             ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
+
                                     {/* Mobile Input Group */}
                                     <div className="relative flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-2">
                                         <button 
@@ -1402,7 +1652,7 @@ export default function JamRoom() {
                                                         <img src={`https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-12 h-12 rounded-lg object-cover" />
                                                         <p className="text-xs font-medium truncate flex-1">{item.title}</p>
                                                         <Play size={12} className="opacity-0 group-hover:opacity-100 text-purple-500" />
-                                                        
+                                                
                                                         <button 
                                                             onClick={(e) => { 
                                                                 e.stopPropagation(); 
@@ -1410,6 +1660,8 @@ export default function JamRoom() {
                                                             }}
                                                             className={`p-1.5 rounded-lg transition mr-1 z-10 ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-600 hover:text-pink-500'}`}
                                                             title="Like"
+                                                            onMouseDown={(e) => e.stopPropagation()}
+                                                            onTouchStart={(e) => e.stopPropagation()}
                                                         >
                                                             <Heart size={14} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
                                                         </button>
@@ -1418,6 +1670,8 @@ export default function JamRoom() {
                                                             onClick={(e) => removeFromQueue(e, i)}
                                                             className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-600 hover:text-red-500 transition ml-2 z-10"
                                                             title="Remove"
+                                                            onMouseDown={(e) => e.stopPropagation()}
+                                                            onTouchStart={(e) => e.stopPropagation()}
                                                         >
                                                             <Trash2 size={14} />
                                                         </button>
@@ -1425,15 +1679,15 @@ export default function JamRoom() {
                                                 </SortableItem>
                                             ))}
                                         </SortableContext>
-                                        
+
                                         {/* Auto-Queue Separator */}
                                         {relatedQueue.length > 0 && (
                                             <>
                                                 <div className="border-t border-white/5 my-4 pt-2">
                                                     <p className="text-[10px] uppercase font-bold text-gray-500 mb-2">Recommended Next</p>
                                                 </div>
-                                                {relatedQueue.slice(0, 5).map((item, i) => (
-                                                     <div 
+                                                {relatedQueue.slice(0, 10).map((item, i) => (
+                                                    <div 
                                                         key={`r-${i}`}
                                                         onClick={() => playRelated(item)}
                                                         className="flex items-center gap-3 p-2 hover:bg-white/5 rounded-xl transition group cursor-pointer opacity-70 hover:opacity-100"
@@ -1441,16 +1695,21 @@ export default function JamRoom() {
                                                         <img src={item.thumb || `https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-10 h-10 rounded-lg object-cover grayscale group-hover:grayscale-0 transition" />
                                                         <p className="text-xs font-medium truncate flex-1 text-gray-400 group-hover:text-white transition">{item.title}</p>
                                                         <button 
-                                                            onClick={(e) => addToQueue(item.id, item.title, e)} 
-                                                            className="p-1.5 bg-white/5 hover:bg-purple-600 rounded-lg transition"
+                                                            onClick={(e) => { 
+                                                                e.stopPropagation(); 
+                                                                handleLike({ ...item, thumb: item.thumb || `https://img.youtube.com/vi/${item.id}/hqdefault.jpg` }); 
+                                                            }}
+                                                            className={`p-2 rounded-lg transition ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-400 hover:text-pink-500'}`}
+                                                            title="Like"
+                                                            onPointerDown={(e) => e.stopPropagation()}
                                                         >
-                                                            <PlusIcon size={12} />
+                                                            <Heart size={16} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
                                                         </button>
                                                     </div>
                                                 ))}
                                             </>
                                         )}
-                                        
+
                                         {queue.length === 0 && relatedQueue.length === 0 && <p className="text-center text-xs text-gray-500 mt-10">Queue is empty... <br/>Add some songs!</p>}
                                     </div>
                                     </DndContext>
@@ -1672,6 +1931,8 @@ export default function JamRoom() {
                                                     }}
                                                     className={`p-1.5 rounded-lg transition mr-1 z-10 ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-600 hover:text-pink-500'}`}
                                                     title="Like"
+                                                    onMouseDown={(e) => e.stopPropagation()}
+                                                    onTouchStart={(e) => e.stopPropagation()}
                                                 >
                                                     <Heart size={14} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
                                                 </button>
@@ -1680,6 +1941,8 @@ export default function JamRoom() {
                                                     onClick={(e) => removeFromQueue(e, i)}
                                                     className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-600 hover:text-red-500 transition ml-2 z-10"
                                                     title="Remove"
+                                                    onMouseDown={(e) => e.stopPropagation()}
+                                                    onTouchStart={(e) => e.stopPropagation()}
                                                 >
                                                     <Trash2 size={14} />
                                                 </button>
@@ -1703,10 +1966,15 @@ export default function JamRoom() {
                                                 <img src={item.thumb || `https://img.youtube.com/vi/${item.id}/default.jpg`} className="w-10 h-10 rounded-lg object-cover grayscale group-hover:grayscale-0 transition" />
                                                 <p className="text-xs font-medium truncate flex-1 text-gray-400 group-hover:text-white transition">{item.title}</p>
                                                 <button 
-                                                    onClick={(e) => addToQueue(item.id, item.title, e)} 
-                                                    className="p-1.5 bg-white/5 hover:bg-purple-600 rounded-lg transition"
+                                                    onClick={(e) => { 
+                                                        e.stopPropagation(); 
+                                                        handleLike({ ...item, thumb: item.thumb || `https://img.youtube.com/vi/${item.id}/hqdefault.jpg` }); 
+                                                    }}
+                                                    className={`p-2 rounded-lg transition ${likedSongs.some(s => s.id === item.id) ? 'text-pink-500' : 'text-gray-400 hover:text-pink-500'}`}
+                                                    title="Like"
+                                                    onPointerDown={(e) => e.stopPropagation()}
                                                 >
-                                                    <PlusIcon size={12} />
+                                                    <Heart size={16} fill={likedSongs.some(s => s.id === item.id) ? "currentColor" : "none"} />
                                                 </button>
                                             </div>
                                         ))}

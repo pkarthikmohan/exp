@@ -5,7 +5,7 @@ import './index.css'
 import App from './App.jsx'
 
 // REPLACE WITH YOUR ACTUAL GOOGLE CLIENT ID
-const GOOGLE_CLIENT_ID = "1076722271830-6126655146522295.apps.googleusercontent.com"; // Example Placeholder
+const GOOGLE_CLIENT_ID = "263720094343-loamic1pc363k083o26e6f9608o3vlsc.apps.googleusercontent.com"; // Example Placeholder
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
