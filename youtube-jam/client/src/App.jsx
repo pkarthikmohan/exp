@@ -692,7 +692,7 @@ export default function JamRoom() {
         e?.stopPropagation();
         socket.emit('add-to-queue', { roomId, video: { id: vidId, title } });
         // Don't close search results, let them keep searching/adding
-        alert(`Added "${title}" to queue`);
+        console.log(`Added "${title}" to queue`);
     };
 
     const playNow = (vidId) => {
@@ -779,12 +779,10 @@ export default function JamRoom() {
     };
 
     const handleLeave = () => {
-        if(confirm("Are you sure you want to leave the room?")) {
-            sessionStorage.removeItem('jam_roomId');
-            sessionStorage.removeItem('jam_username');
-            // Hard reload to clean state
-            window.location.reload();
-        }
+        sessionStorage.removeItem('jam_roomId');
+        sessionStorage.removeItem('jam_username');
+        // Hard reload to clean state
+        window.location.reload();
     };
     
     const removeFromQueue = (e, index) => {
@@ -796,13 +794,6 @@ export default function JamRoom() {
     if (!inRoom) {
         return (
             <div className="min-h-screen bg-[#0a0a0c] flex items-center justify-center p-6 relative overflow-hidden">
-                {/* Mouse Hover Glow (Desktop Only) */}
-                <div 
-                    className="hidden lg:block pointer-events-none fixed inset-0 z-0 transition-opacity duration-300"
-                    style={{
-                        background: `radial-gradient(600px circle at ${mousePos.x}px ${mousePos.y}px, rgba(168, 85, 247, 0.45), transparent 80%)`
-                    }}
-                />
                 <div className="bg-white/5 border border-white/10 p-8 rounded-[2.5rem] w-full max-w-md backdrop-blur-xl relative z-10">
                     <div className="text-center mb-6">
                         <div className="w-16 h-16 bg-gradient-to-tr from-purple-600 to-pink-500 rounded-2xl flex items-center justify-center shadow-lg shadow-purple-500/20 mx-auto mb-4">
@@ -858,7 +849,7 @@ export default function JamRoom() {
                     <form onSubmit={handleJoin} className="space-y-4">
                         <input 
                             required 
-                            className={`w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white ${userProfile ? 'opacity-50 cursor-not-allowed text-gray-500' : ''}`} 
+                            className={`w-full bg-white/10 border border-white/20 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white placeholder-gray-400 font-medium ${userProfile ? 'opacity-50 cursor-not-allowed text-gray-400' : ''}`} 
                             placeholder="Your Name" 
                             value={username}
                             onChange={e => setUsername(e.target.value)} 
@@ -866,7 +857,7 @@ export default function JamRoom() {
                         />
                         <input 
                             required 
-                            className={`w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white ${isInvite ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className={`w-full bg-white/10 border border-white/20 rounded-2xl py-4 px-6 outline-none focus:ring-2 ring-purple-500 transition text-white placeholder-gray-400 font-medium ${isInvite ? 'opacity-50 cursor-not-allowed' : ''}`}
                             placeholder="Room ID (e.g. ChillVibes)" 
                             value={roomId}
                             onChange={e => !isInvite && setRoomId(e.target.value)}
