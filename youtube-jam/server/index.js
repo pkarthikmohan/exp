@@ -48,10 +48,19 @@ app.post('/api/user/:id/likes', (req, res) => {
 // Defaults to localhost:8000 for local development.
 const REC_SERVICE_URL = process.env.REC_SERVICE_URL || 'http://localhost:8000';
 
-app.post('/api/rec/rerank', async (req, res) => {
+app.post('/api/rec/recommend', async (req, res) => {
     try {
         // Forward the body (candidates, user_interactions) to the Python service
-        const response = await axios.post(`${REC_SERVICE_URL}/rerank`, req.body);
+        // Fix: The Python usage in client calls `/recommend`, but the proxy was defined as `/rerank`
+        // Consolidating everything to use `/recommend` based on what the client sends.
+        // Actually, the client sends `/recommend` to the proxy endpoint? 
+        // No, client uses `REC_ENGINE_URL + '/recommend'`.
+        // REC_ENGINE_URL is `/api/rec`.
+        // So client POSTs to `/api/rec/recommend`.
+        // This server route was listening on `/api/rec/rerank`. That is a mismatch.
+        
+        // Changing this route to catch `/api/rec/recommend`
+        const response = await axios.post(`${REC_SERVICE_URL}/recommend`, req.body);
         res.json(response.data);
     } catch (err) {
         console.error("Rec Engine Error:", err.message);
