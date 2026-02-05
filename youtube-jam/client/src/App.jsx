@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import YouTube from 'react-youtube';
 import EmojiPicker from 'emoji-picker-react';
-import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus as PlusIcon, SkipBack, SkipForward, Trash2, LogOut, Menu, X, UserCircle, Heart, Maximize, Smile, Image as ImageIcon, Link as LinkIcon, Check, LogOut as SignOutIcon } from 'lucide-react';
+import { Search, ListMusic, MessageSquare, Send, Play, Pause, Users, LogIn, Plus as PlusIcon, SkipBack, SkipForward, Trash2, LogOut, Menu, X, UserCircle, Heart, Maximize, Smile, Image as ImageIcon, Link as LinkIcon, Check, LogOut as SignOutIcon, ChevronUp, Music } from 'lucide-react';
 import axios from 'axios';
 import { GoogleLogin, googleLogout } from '@react-oauth/google';
 import { jwtDecode } from 'jwt-decode';
@@ -66,6 +66,8 @@ export default function JamRoom() {
     const [activeTab, setActiveTab] = useState('emoji');
     const [gifSearch, setGifSearch] = useState("");
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+    const [isAudioMode, setIsAudioMode] = useState(false);
+    const [showStickyPlayer, setShowStickyPlayer] = useState(false);
 
     useEffect(() => {
         const handleMouseMove = (e) => {
@@ -74,6 +76,19 @@ export default function JamRoom() {
         
         window.addEventListener('mousemove', handleMouseMove);
         return () => window.removeEventListener('mousemove', handleMouseMove);
+    }, []);
+
+    useEffect(() => {
+        const handleScroll = () => {
+            if (videoContainerRef.current) {
+                const rect = videoContainerRef.current.getBoundingClientRect();
+                // If video bottom is above viewport top (scrolled past)
+                setShowStickyPlayer(rect.bottom < 0);
+            }
+        };
+
+        window.addEventListener('scroll', handleScroll);
+        return () => window.removeEventListener('scroll', handleScroll);
     }, []);
     
     // DnD Sensors
@@ -960,12 +975,12 @@ export default function JamRoom() {
 
             {/* Sidebar Menu Overlay */}
             <div 
-                className={`fixed inset-0 z-50 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${isMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                className={`fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${isMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
                 onClick={() => setIsMenuOpen(false)}
             />
 
             {/* Sidebar Slide-in Panel */}
-            <div className={`fixed left-0 top-0 h-full w-80 bg-[#121216] border-r border-white/10 z-50 transform transition-transform duration-300 ease-in-out shadow-2xl p-6 flex flex-col ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+            <div className={`fixed left-0 top-0 h-full w-80 bg-[#121216] border-r border-white/10 z-[60] transform transition-transform duration-300 ease-in-out shadow-2xl p-6 flex flex-col ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
                 <div className="flex items-center justify-between mb-10">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-gradient-to-tr from-purple-600 to-pink-500 rounded-xl flex items-center justify-center">
@@ -1307,32 +1322,68 @@ export default function JamRoom() {
             )}
 
             <div className="col-span-12 lg:col-span-8">
+                    {/* Main Player Container */}
                     <div ref={videoContainerRef} className="rounded-[2rem] overflow-hidden border border-white/10 shadow-2xl bg-black aspect-video mb-8 ring-1 ring-white/5 relative group">
+                        
+                        {/* 1) Empty State */}
                         {!currentVideoId ? (
                             <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 bg-white/5">
                                 <ListMusic size={48} className="mb-4 opacity-50" />
                                 <p className="text-lg">Search for a song or add to queue to start jamming!</p>
                             </div>
                         ) : (
+                        /* 2) Combined Audio/Video State */
                         <>
-                            {/* Custom Overlays for controls=0 */}
-                            <div className="absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/80 to-transparent z-10 flex justify-between items-start opacity-0 group-hover:opacity-100 transition duration-300">
-                                <h3 className="text-white font-bold text-lg line-clamp-1 flex-1 pr-4 drop-shadow-md">{currentTitle}</h3>
-                                <div className="flex gap-2">
-                                  <button onClick={toggleFullscreen} className="p-2 hover:bg-white/20 rounded-full transition text-white">
-                                    <Maximize size={24} />
-                                  </button>
+                            {/* Audio Mode Animation Overlay */}
+                            <div 
+                                className={`absolute inset-0 flex flex-col items-center justify-center z-50 transition-all duration-500 ${isAudioMode ? 'opacity-100 pointer-events-auto visible' : 'opacity-0 pointer-events-none invisible'}`}
+                                style={{ backgroundColor: '#09090b' }} // Explicit hex (zinc-950) to ensure darkness
+                            >
+                                <div className="flex items-end gap-1 mb-4 md:mb-6 h-10 md:h-16">
+                                    {[...Array(8)].map((_, i) => (
+                                        <div 
+                                            key={i} 
+                                            className="w-2 md:w-3 bg-purple-500 rounded-t-sm animate-pulse" 
+                                            style={{ 
+                                                height: '100%', 
+                                                animationDuration: `${0.6 + i * 0.1}s`,
+                                                animationDelay: `${i * 0.05}s`,
+                                                opacity: 0.8
+                                            }} 
+                                        />
+                                    ))}
                                 </div>
+                                <img 
+                                    src={`https://img.youtube.com/vi/${currentVideoId}/mqdefault.jpg`} 
+                                    className={`w-24 h-24 md:w-32 md:h-32 rounded-full object-cover border-4 border-white/10 shadow-2xl shrink-0 ${isPlaying ? 'animate-[spin_10s_linear_infinite]' : ''}`}
+                                    alt="vinyl"
+                                />
+                                <p className="mt-4 md:mt-6 text-gray-400 font-mono text-xs md:text-sm tracking-widest uppercase">Audio Mode</p>
                             </div>
-                            
-                            {/* Blocker for Watch Later / Share (Transparent, behind controls but above video) */}
-                            <div className="absolute top-0 right-0 w-32 h-24 z-[5]" />
 
-                            <YouTube 
-                                key={currentVideoId}
-                                videoId={currentVideoId} 
-                                ref={playerRef}
-                                onReady={(e) => {
+                            {/* Video Overlays - Only visible in Video Mode */}
+                            <div className={`absolute inset-0 z-40 pointer-events-none ${isAudioMode ? 'hidden' : ''}`}>
+                                <div className="absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/80 to-transparent flex justify-between items-start opacity-0 group-hover:opacity-100 transition duration-300 pointer-events-auto">
+                                    <h3 className="text-white font-bold text-lg line-clamp-1 flex-1 pr-4 drop-shadow-md">{currentTitle}</h3>
+                                    <div className="flex gap-2">
+                                    <button onClick={toggleFullscreen} className="p-2 hover:bg-white/20 rounded-full transition text-white">
+                                        <Maximize size={24} />
+                                    </button>
+                                    </div>
+                                </div>
+                                {/* Blocker for Watch Later / Share */}
+                                <div className="absolute top-0 right-0 w-32 h-24 pointer-events-auto" />
+                            </div>
+
+                            {/* Main YouTube Player */}
+                            <div className={`absolute inset-0 z-0 transition-opacity duration-500 ${isAudioMode ? 'opacity-0 invisible' : 'opacity-100 visible'}`}>
+                                <YouTube 
+                                    key={currentVideoId}
+                                    videoId={currentVideoId} 
+                                    className="w-full h-full"
+                                    iframeClassName="w-full h-full"
+                                    ref={playerRef}
+                                    onReady={(e) => {
                                     // Capture Title
                                     const data = e.target.getVideoData();
                                     if (data && data.title) setCurrentTitle(data.title);
@@ -1442,8 +1493,8 @@ export default function JamRoom() {
                                         fs: 0               // Remove native fullscreen button
                                     } 
                                 }} 
-                                className="w-full h-full"
                             />
+                            </div>
                         </>
                         )}
                     </div>
@@ -1453,12 +1504,21 @@ export default function JamRoom() {
                             <h2 className="text-xl font-bold truncate text-white leading-tight">{currentTitle}</h2>
                             <p className="text-sm font-medium text-gray-400">Now Playing</p>
                         </div>
-                        <button 
-                            onClick={() => handleLike({ id: currentVideoId, title: currentTitle })}
-                            className={`p-3 rounded-full transition-all duration-300 ${likedSongs.some(s => s.id === currentVideoId) ? 'bg-pink-500/20 text-pink-500 scale-110' : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10'}`}
-                        >
-                            <Heart size={24} className={likedSongs.some(s => s.id === currentVideoId) ? "fill-current" : ""} />
-                        </button>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setIsAudioMode(!isAudioMode)}
+                                className={`p-3 rounded-full transition-all duration-300 ${isAudioMode ? 'bg-purple-500 text-white' : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10'}`}
+                                title={isAudioMode ? "Show Video" : "Audio Only Mode"}
+                            >
+                                <Music size={24} />
+                            </button>
+                            <button 
+                                onClick={() => handleLike({ id: currentVideoId, title: currentTitle })}
+                                className={`p-3 rounded-full transition-all duration-300 ${likedSongs.some(s => s.id === currentVideoId) ? 'bg-pink-500/20 text-pink-500 scale-110' : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10'}`}
+                            >
+                                <Heart size={24} className={likedSongs.some(s => s.id === currentVideoId) ? "fill-current" : ""} />
+                            </button>
+                        </div>
                     </div>
 
                     {/* Progress Bar */}
@@ -2147,6 +2207,87 @@ export default function JamRoom() {
                     </div>
                 </div>
             </main>
+
+            {/* Sticky Audio Player Floating Glass Design */}
+            {(showStickyPlayer || isAudioMode) && currentVideoId && (
+                <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center pb-4 px-4 pointer-events-none">
+                    <div className="w-full max-w-4xl bg-black/60 backdrop-blur-2xl border border-white/10 rounded-2xl p-4 shadow-2xl flex items-center justify-between gap-4 pointer-events-auto overflow-hidden relative group">
+                        
+                         {/* Ambient Glow Background */}
+                        <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
+                        
+                        {/* Progress Bar (Top Border Line) */}
+                        <div className="absolute top-0 left-0 right-0 h-[2px] bg-white/10">
+                            <div 
+                                className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300"
+                                style={{ width: `${(progress / (duration || 100)) * 100}%` }}
+                            />
+                        </div>
+
+                        {/* Song Info */}
+                        <div className="flex items-center gap-4 flex-1 min-w-0 relative z-10">
+                            <div className={`w-14 h-14 rounded-full overflow-hidden border-2 border-white/10 shadow-lg shrink-0 ${isPlaying ? 'animate-[spin_4s_linear_infinite]' : ''}`}>
+                                 <img 
+                                    src={`https://img.youtube.com/vi/${currentVideoId}/mqdefault.jpg`} 
+                                    className="w-full h-full object-cover" 
+                                    alt="vinyl" 
+                                />
+                            </div>
+                            <div className="min-w-0 flex flex-col justify-center">
+                                <h4 className="text-white font-bold text-sm truncate">{currentTitle}</h4>
+                                <p className="text-purple-300 text-xs truncate font-medium flex items-center gap-2">
+                                    {isPlaying ? <span className="flex gap-0.5 h-2 items-end"><span className="w-0.5 bg-purple-400 animate-dance h-full"></span><span className="w-0.5 bg-purple-400 animate-dance delay-75 h-2/3"></span><span className="w-0.5 bg-purple-400 animate-dance delay-150 h-full"></span></span> : <Music size={10} />}
+                                    {formatTime(progress)} / {formatTime(duration)}
+                                </p>
+                            </div>
+                        </div>
+                        
+                        {/* Controls */}
+                        <div className="flex items-center gap-3 relative z-10">
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); handleLike({ id: currentVideoId, title: currentTitle }); }}
+                                className={`p-2 rounded-full transition ${likedSongs.some(s => s.id === currentVideoId) ? 'text-pink-500 bg-pink-500/10' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}
+                            >
+                                <Heart size={18} fill={likedSongs.some(s => s.id === currentVideoId) ? "currentColor" : "none"} />
+                            </button>
+
+                            <div className="h-8 w-[1px] bg-white/10 mx-1"></div>
+
+                            <button 
+                                onClick={handlePrevious}
+                                className="p-2 text-white hover:text-purple-300 hover:scale-110 transition"
+                            >
+                                <SkipBack size={22} fill="currentColor" />
+                            </button>
+                            
+                            <button 
+                                onClick={handleTogglePlay}
+                                className="p-3 bg-white text-black rounded-full hover:scale-110 active:scale-95 transition shadow-lg shadow-purple-500/20"
+                            >
+                                {isPlaying ? <Pause size={24} fill="black" /> : <Play size={24} fill="black" className="ml-1" />}
+                            </button>
+                            
+                            <button 
+                                onClick={handleNext}
+                                className="p-2 text-white hover:text-purple-300 hover:scale-110 transition"
+                            >
+                                <SkipForward size={22} fill="currentColor" />
+                            </button>
+
+                            <button 
+                                onClick={() => {
+                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                    setIsAudioMode(false);
+                                }}
+                                className="p-2 ml-2 text-gray-500 hover:text-white hover:bg-white/10 rounded-full transition hidden sm:block"
+                                title="Expand Player"
+                            >
+                                <Maximize size={18} />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
