@@ -15,6 +15,7 @@
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "socket.io": "^4.8.3",
-    "youtube-sr": "^4.3.12"
+    "youtube-sr": "^4.3.12",
+    "yt-search": "^2.13.1"
   }
 }

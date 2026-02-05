@@ -4,7 +4,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const axios = require('axios');
-const YouTube = require('youtube-sr').default;
+// const YouTube = require('youtube-sr').default; // Disabled due to instability
+const ytSearch = require('yt-search');
 const db = require('./db');
 
 const app = express();
@@ -41,6 +42,24 @@ app.post('/api/user/:id/likes', (req, res) => {
     
     res.json(updatedLikes);
 });
+
+// Proxy to Python Recommendation Engine
+// In production (Render), set REC_SERVICE_URL env var to your Python service URL.
+// Defaults to localhost:8000 for local development.
+const REC_SERVICE_URL = process.env.REC_SERVICE_URL || 'http://localhost:8000';
+
+app.post('/api/rec/rerank', async (req, res) => {
+    try {
+        // Forward the body (candidates, user_interactions) to the Python service
+        const response = await axios.post(`${REC_SERVICE_URL}/rerank`, req.body);
+        res.json(response.data);
+    } catch (err) {
+        console.error("Rec Engine Error:", err.message);
+        // Fallback: If Rec Engine is down, return empty or original list?
+        // Returning 503 lets the client handle fallback.
+        res.status(503).json({ error: "Recommendation Service Unavailable" });
+    }
+});
 // ---------------------------------
 
 const server = http.createServer(app);
@@ -57,32 +76,25 @@ app.get('/search', async (req, res) => {
         
         let results = [];
         try {
-            const isUrl = /^(https?\:\/\/)?(www\.youtube\.com|youtu\.?be)\/.+$/.test(q);
-            if (isUrl) {
-                const video = await YouTube.getVideo(q);
-                if (video) {
-                    results = [{
-                        id: video.id,
-                        title: video.title,
-                        thumb: video.thumbnail?.url || ''
-                    }];
-                }
-            } else {
-                const videos = await YouTube.search(q, { limit: 12, type: 'video' });
-                results = videos.map(item => ({
-                    id: item.id,
-                    title: item.title,
-                    thumb: item.thumbnail?.url || ''
+            // Use yt-search (Scraper)
+            const r = await ytSearch(q);
+            if (r && r.videos.length > 0) {
+                 results = r.videos.slice(0, 12).map(v => ({
+                    id: v.videoId,
+                    title: v.title,
+                    thumb: v.thumbnail,
+                    description: v.description,
+                    channelTitle: v.author.name
                 }));
             }
-            console.log('Search results:', results.length);
-        } catch (apiError) {
-            console.error('YouTube Search Error:', apiError.message);
-            // Minimal Fallback just in case
-            results = [
-               { id: 'jfKfPfyJRdk', title: 'lofi hip hop radio - beats to relax/study to', thumb: 'https://img.youtube.com/vi/jfKfPfyJRdk/mqdefault.jpg' }
-            ];
+            console.log('Search results (yt-search):', results.length);
+        } catch (err) {
+            console.error('Search failed:', err.message);
+            results = [];
         }
+        
+        // Filter out lofi fallback if it ever sneaks in
+        results = results.filter(v => !v.title.toLowerCase().includes("lofi hip hop radio - beats to relax/study to"));
         
         res.json(results);
     } catch (err) {
@@ -94,84 +106,41 @@ app.get('/search', async (req, res) => {
 const fetchAndEmitRelated = async (videoId, socket) => {
     if (!videoId) return;
     try {
-        console.log('Fetching related for:', videoId);
+        const videoDetails = await ytSearch({ videoId: videoId });
         
-        // 1. Get stats/title/channel
-        const videoResults = await YouTube.search(videoId, { limit: 1, type: 'video' });
-        const sourceVideo = videoResults[0];
-        
-        if (!sourceVideo) throw new Error("Video not found");
+        const isMusicOnly = (v) => {
+            const t = v.title.toLowerCase();
+            const blockList = [
+                'tutorial', 'how to', 'lesson', 'course', 'review', 'reaction', 'gameplay', 
+                'walkthrough', 'unboxing', 'coding', 'programming', 'setup', 'install', 
+                'explained', 'lecture', 'news', 'update', 'trailer', 'vlog'
+            ];
+            if (blockList.some(k => t.includes(k))) return false;
+            return true;
+        };
 
-        const title = sourceVideo.title;
-        const channelName = sourceVideo.channel?.name || '';
+        const titleRef = videoDetails ? videoDetails.title.replace(/\(.*\)|official video|lyrics/gi, '') : "";
+        const query = `songs similar to ${titleRef}`;
         
-        // 2. Intelligent Discovery Strategy
-        // We want to avoid "Same Song (Remix)" or "Same Song (Live)"
-        // We want "Songs with similar vibe"
-        
-        // Clean title: remove "Official Video", "Lyrics", content in brackets often helps
-        // e.g. "Coldplay - Viva La Vida (Official Video)" -> just "Viva La Vida"
-        const cleanTitle = title
-            .replace(/[\(\[\{].*?[\)\]\}]/g, '') // remove brackets
-            .replace(/official|video|audio|lyrics|hq|hd|mv/gi, '') // remove keywords
-            .replace(/[^\w\s]/gi, '') // remove special chars
-            .trim();
-
-        console.log(`Analyzing vibe for: "${cleanTitle}" by ${channelName}`);
-        
-        const queries = [
-            `songs similar to ${cleanTitle} ${channelName}`, // Semantic search
-            `${channelName} radio`, // Artist radio
-            `best songs like ${cleanTitle}` // Vibe matching
-        ];
-        
-        // Pick one query strategy randomly to vary results or run parallel? 
-        // Let's run a strong semantic search first.
-        let query = queries[0];
-        console.log('Searching related with query:', query);
-        
-        let videos = await YouTube.search(query, { limit: 35, type: 'video' });
-        
-        const results = videos
-            .filter(v => v.id !== videoId)
-            // FILTER: Remove songs that sound too much like the original title (covers, remixes)
-            .filter(v => {
-                const resTitle = v.title.toLowerCase();
-                const originalWords = cleanTitle.toLowerCase().split(' ').filter(w => w.length > 3);
-                
-                // If the result contains ALL the significant words of original title, it's likely a version of it.
-                // We want to BLOCK it unless it's a completely different artist (which is hard to know for sure in simple search)
-                const matchCount = originalWords.filter(word => resTitle.includes(word)).length;
-                const isSameSong = matchCount >= Math.max(1, originalWords.length - 1); 
-                
-                return !isSameSong;
-            })
-            .slice(0, 25)
-            .map(item => ({
-                id: item.id,
-                title: item.title,
-                thumb: item.thumbnail?.url || `https://img.youtube.com/vi/${item.id}/mqdefault.jpg`
-            }));
-            
-        // Fallback: If strict filtering killed everything, just show artist's other top songs
-        if (results.length < 5 && channelName) {
-            console.log('Fallback to artist top songs...');
-            const artistMix = await YouTube.search(`${channelName} top songs`, { limit: 20, type: 'video' });
-             const artistResults = artistMix
-                .filter(v => v.id !== videoId && !results.find(r => r.id === v.id))
-                .map(item => ({
-                    id: item.id,
-                    title: item.title,
-                    thumb: item.thumbnail?.url || `https://img.youtube.com/vi/${item.id}/mqdefault.jpg`
+        const r = await ytSearch(query);
+        let results = [];
+        if (r && r.videos.length > 0) {
+             results = r.videos
+                .filter(isMusicOnly)
+                .slice(0, 15)
+                .map(v => ({
+                    id: v.videoId,
+                    title: v.title,
+                    thumb: v.thumbnail,
+                    duration: v.timestamp,
+                    channel: v.author.name
                 }));
-             results.push(...artistResults);
         }
         
-        console.log('Found related videos:', results.length);
+        socket.emit('related-videos-result', results);
         socket.emit('related-videos', results);
     } catch (e) {
-        console.error('Error fetching related:', e.message);
-        socket.emit('related-videos', []);
+        console.error('fetchAndEmitRelated error:', e.message);
     }
 };
 
@@ -184,7 +153,8 @@ io.on('connection', (socket) => {
             const videoId = typeof arg === 'object' ? arg.videoId : arg;
             if (!videoId) return;
 
-            const video = await YouTube.getVideo(videoId);
+            // Use yt-search for better reliability
+            const videoDetails = await ytSearch({ videoId: videoId });
             let results = [];
 
              // Helper to filter out non-music content
@@ -200,41 +170,36 @@ io.on('connection', (socket) => {
                 return true;
             };
             
-            if (video && video.related && video.related.length > 0) {
-                 results = video.related
-                    .filter(isMusicOnly)
-                    .map(v => ({
-                        id: v.id,
-                        title: v.title,
-                        thumb: v.thumbnail?.url || `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`,
-                        duration: v.durationFormatted,
-                        channel: v.channel?.name
-                    }));
-            } 
+            // yt-search doesn't give "related" list directly in video details usually,
+            // so we construct a search query.
+            const titleRef = videoDetails ? videoDetails.title.replace(/\(.*\)|official video|lyrics/gi, '') : "";
+            const query = `songs similar to ${titleRef}`;
             
-            // Fallback if related is empty or not enough
-            if (results.length < 5) {
-                const videoResults = await YouTube.search(videoId, { limit: 1, type: 'video' });
-                const sourceVideo = videoResults[0];
-                if(sourceVideo) {
-                    // Force "song" keyword in query to bias towards music
-                    const query = `songs similar to ${sourceVideo.title.replace(/\(.*\)|official video|lyrics/gi, '')}`;
-                    const videos = await YouTube.search(query, { limit: 30, type: 'video' });
-                    const searched = videos
-                        .filter(isMusicOnly)
-                        .map(v => ({
-                            id: v.id,
-                            title: v.title,
-                            thumb: v.thumbnail?.url, 
-                            duration: v.durationFormatted,
-                            channel: v.channel?.name
-                        }));
-                    results = [...results, ...searched].slice(0, 25);
-                }
+            const r = await ytSearch(query);
+            
+            if (r && r.videos.length > 0) {
+                 results = r.videos
+                    .filter(isMusicOnly)
+                    .slice(0, 15)
+                    .map(v => ({
+                        id: v.videoId,
+                        title: v.title,
+                        thumb: v.thumbnail,
+                        duration: v.timestamp,
+                        channel: v.author.name
+                    }));
             }
             
+            // Broadcast results
             socket.emit('related-videos-result', results);
-        } catch(e) { console.error(e); }
+            socket.emit('related-videos', results);
+
+            // Also broadcast to room if applicable (legacy behavior support)
+            // If the user joined a room, we could try to find it, but the client handles the received event.
+            
+        } catch (e) {
+            console.error('Error in get-related:', e.message);
+        }
     });
 
     socket.on('reorder-queue', ({ roomId, newQueue }) => {

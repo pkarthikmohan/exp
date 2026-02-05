@@ -677,6 +677,78 @@ export default function JamRoom() {
         }
     };
 
+    // --- Recommendation Engine Integration ---
+    // Use relative path so requests go through Node server proxy
+    const REC_ENGINE_URL = "/api/rec";
+
+    const performSmartSort = async (candidates) => {
+        if (!candidates || candidates.length === 0) return [];
+        
+        // Construct User Interactions from Liked Songs
+        const interactions = likedSongs.map(s => ({
+            video_id: s.id,
+            interaction_type: 'like',
+            timestamp: new Date().toISOString(),
+            channel_title: s.channelTitle || "", 
+            video_title: s.title
+        }));
+
+        const formattedCandidates = candidates.map(s => ({
+            id: s.id,
+            title: s.title,
+            description: s.description || "",
+            thumbnail_url: s.thumb || s.thumbnail_url, // Handle both formats if mixed
+            channel_title: s.channelTitle || ""
+        }));
+
+        try {
+            const res = await axios.post(`${REC_ENGINE_URL}/recommend`, {
+                user_id: userProfile?.googleId || "guest",
+                candidate_videos: formattedCandidates,
+                user_interactions: interactions
+            });
+            
+            // Map back to frontend format
+            return res.data.map(v => ({
+                id: v.id,
+                title: v.title,
+                thumb: v.thumbnail_url,
+                description: v.description,
+                channelTitle: v.channel_title
+            }));
+        } catch (e) {
+            console.error("Smart Sort failed", e);
+            alert("AI Engine offline or error.");
+            return candidates;
+        }
+    };
+
+    const handleSearchSort = async () => {
+        const sorted = await performSmartSort(searchResults);
+        if (sorted.length > 0) {
+            setSearchResults(sorted);
+            alert("✨ Search results re-ranked!");
+        }
+    };
+
+    const handleVibesSort = async () => {
+        const sorted = await performSmartSort(suggestedVideos);
+        if (sorted.length > 0) {
+            setSuggestedVideos(sorted);
+            alert("✨ Vibes re-ranked!");
+        }
+    };
+
+    const handleQueueSort = async () => {
+        // We only sort the 'Recommended Next' (relatedQueue) locally
+        const sorted = await performSmartSort(relatedQueue);
+        if (sorted.length > 0) {
+            setRelatedQueue(sorted);
+            alert("✨ Recommendations re-ranked!");
+        }
+    };
+    // -----------------------------------------
+
     const playRelated = (video) => {
         // When clicking a related video (from vibes or queue suggestion)
         playNow(video.id);
@@ -1173,12 +1245,20 @@ export default function JamRoom() {
                             <h2 className="text-xl font-bold flex items-center gap-2">
                                 <span className="w-2 h-6 bg-purple-500 rounded-full"></span> Search Results
                             </h2>
-                            <button 
-                                onClick={() => { setSearchResults([]); setSearchQuery(""); }}
-                                className="text-sm text-gray-400 hover:text-white transition"
-                            >
-                                Clear
-                            </button>
+                            <div className="flex gap-4">
+                                <button 
+                                    onClick={handleSearchSort}
+                                    className="text-sm text-purple-400 hover:text-purple-300 transition font-bold flex items-center gap-1"
+                                >
+                                    ✨ AI Sort
+                                </button>
+                                <button 
+                                    onClick={() => { setSearchResults([]); setSearchQuery(""); }}
+                                    className="text-sm text-gray-400 hover:text-white transition"
+                                >
+                                    Clear
+                                </button>
+                            </div>
                         </div>
                         {/* Modified to List Style as requested */}
                         <div className="flex flex-col gap-2 mb-8">
@@ -1503,7 +1583,17 @@ export default function JamRoom() {
                                     </>
                                 ) : (
                                     <>
-                                        <h2 className="text-xl font-bold mb-4 flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Suggested Vibes</h2>
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h2 className="text-xl font-bold flex items-center gap-2 italic"><span className="w-2 h-6 bg-purple-500 rounded-full"></span> Suggested Vibes</h2>
+                                            {suggestedVideos.length > 0 && (
+                                                <button 
+                                                    onClick={handleVibesSort}
+                                                    className="text-xs text-purple-400 hover:text-purple-300 font-bold"
+                                                >
+                                                    ✨ AI Sort
+                                                </button>
+                                            )}
+                                        </div>
                                         
                                         {/* Added Search Bar to Suggested Vibes View in Mobile */}
                                         <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-2 mb-4">
@@ -1739,8 +1829,14 @@ export default function JamRoom() {
                                         {/* Auto-Queue Separator */}
                                         {relatedQueue.length > 0 && (
                                             <>
-                                                <div className="border-t border-white/5 my-4 pt-2">
-                                                    <p className="text-[10px] uppercase font-bold text-gray-500 mb-2">Recommended Next</p>
+                                                <div className="border-t border-white/5 my-4 pt-2 flex items-center justify-between">
+                                                    <p className="text-[10px] uppercase font-bold text-gray-500">Recommended Next</p>
+                                                    <button 
+                                                        onClick={(e) => { e.stopPropagation(); handleQueueSort(); }}
+                                                        className="text-[10px] text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1"
+                                                    >
+                                                        ✨ AI Sort
+                                                    </button>
                                                 </div>
                                                 {relatedQueue.slice(0, 10).map((item, i) => (
                                                     <div 
@@ -1782,6 +1878,14 @@ export default function JamRoom() {
                                 <span className="w-2 h-6 bg-purple-500 rounded-full"></span> 
                                 {viewMode === 'results' ? "Search Results" : "Suggested Vibes"}
                             </h2>
+                            {viewMode === 'vibes' && suggestedVideos.length > 0 && (
+                                <button 
+                                    onClick={handleVibesSort}
+                                    className="text-sm text-purple-400 hover:text-purple-300 transition font-bold flex items-center gap-1"
+                                >
+                                    ✨ AI Sort Vibes
+                                </button>
+                            )}
                             {viewMode === 'results' && (
                                 <button onClick={() => setViewMode('vibes')} className="text-sm text-gray-400 hover:text-white transition">
                                     Back to Suggestions
