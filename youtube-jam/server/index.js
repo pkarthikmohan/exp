@@ -60,7 +60,10 @@ app.post('/api/rec/recommend', async (req, res) => {
         // This server route was listening on `/api/rec/rerank`. That is a mismatch.
         
         // Changing this route to catch `/api/rec/recommend`
-        const response = await axios.post(`${REC_SERVICE_URL}/recommend`, req.body);
+        // Sanitize base URL to prevent double slashes if env var has trailing slash
+        const baseUrl = REC_SERVICE_URL.replace(/\/$/, '');
+        console.log(`Forwarding recommendation request to: ${baseUrl}/recommend`);
+        const response = await axios.post(`${baseUrl}/recommend`, req.body);
         res.json(response.data);
     } catch (err) {
         console.error("Rec Engine Error:", err.message);
