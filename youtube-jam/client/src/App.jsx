@@ -719,13 +719,13 @@ export default function JamRoom() {
         } catch (e) {
             console.error("Smart Sort failed", e);
             alert("AI Engine offline or error.");
-            return candidates;
+            return null; // Return null to indicate failure
         }
     };
 
     const handleSearchSort = async () => {
         const sorted = await performSmartSort(searchResults);
-        if (sorted.length > 0) {
+        if (sorted && sorted.length > 0) {
             setSearchResults(sorted);
             alert("✨ Search results re-ranked!");
         }
@@ -733,7 +733,7 @@ export default function JamRoom() {
 
     const handleVibesSort = async () => {
         const sorted = await performSmartSort(suggestedVideos);
-        if (sorted.length > 0) {
+        if (sorted && sorted.length > 0) {
             setSuggestedVideos(sorted);
             alert("✨ Vibes re-ranked!");
         }
